@@ -42,13 +42,14 @@ jobs:
     env:
       DB_PASSWORD: ci-nur-test
       SICHERUNG_VERZEICHNIS: ${{ github.workspace }}/ci-sicherung
-      SICHERUNG_AGE_EMPFAENGER: ${{ runner.temp }}/ci.pub
-      WIEDERHERSTELLUNG_SCHLUESSEL: ${{ runner.temp }}/ci.key
+      SICHERUNG_AGE_EMPFAENGER: ${{ github.workspace }}/../ci-schluessel/ci.pub
+      WIEDERHERSTELLUNG_SCHLUESSEL: ${{ github.workspace }}/../ci-schluessel/ci.key
     steps:
       - uses: actions/checkout@v4
       - name: age installieren, Testschlüssel erzeugen
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq age
+          mkdir -p "$(dirname "$WIEDERHERSTELLUNG_SCHLUESSEL")"
           age-keygen -o "$WIEDERHERSTELLUNG_SCHLUESSEL"
           age-keygen -y "$WIEDERHERSTELLUNG_SCHLUESSEL" > "$SICHERUNG_AGE_EMPFAENGER"
       - name: .env.prod für die CI
