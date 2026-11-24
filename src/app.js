@@ -15,6 +15,7 @@ import graduierungenRoutes from './routes/graduierungen.js';
 import rechteRoutes from './routes/rechte.js';
 import anwendungenRoutes from './routes/anwendungen.js';
 import organisationRouten from './module/organisation/routen.js';
+import rechteV2Routen from './module/rechte/routen.js';
 import { registriereV2 } from './pipeline/index.js';
 import { registriereBackchannel } from './backchannel.js';
 import { createMailer } from './mailer.js';
@@ -58,7 +59,7 @@ export async function buildApp(overrides = {}) {
   await app.register(abgleichRoutes);
   await app.register(graduierungenRoutes);
   await app.register(rechteRoutes);
-  await registriereV2(app, (v2) => { for (const definiere of [organisationRouten, ...(overrides.v2Routen || [])]) definiere(v2); });
+  await registriereV2(app, (v2) => { for (const definiere of [organisationRouten, rechteV2Routen, ...(overrides.v2Routen || [])]) definiere(v2); });
 
   app.addHook('onClose', async () => { if (!overrides.pool) await app.pool.end(); });
   return app;
