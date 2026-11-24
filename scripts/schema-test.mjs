@@ -4,7 +4,7 @@
 //   npm run db:test
 //   npm run db:test -- --behalten   → Server läuft weiter (Port wird ausgegeben), Strg+C beendet und löscht
 
-import { readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -61,14 +61,16 @@ try {
 
   const schema = await readFile(path.join(root, 'db', 'schema.sql'), 'utf8');
   await db.query(schema);
-  console.log('✔ schema.sql eingespielt\n');
+  const migDir = path.join(root, 'db', 'migrations');
+  for (const f of (await readdir(migDir)).filter((f) => f.endsWith('.sql')).sort()) await db.query(await readFile(path.join(migDir, f), 'utf8'));
+  console.log('✔ schema.sql und Migrationen eingespielt\n');
 
   await db.query('begin');
 
-  await test('Seed: drei Anwendungen, vier Rechte', async () => {
+  await test('Seed: vier Anwendungen (mit Migrationen), vier Rechte', async () => {
     const { rows: [r] } = await db.query(
       `select (select count(*) from anwendungen)::int a, (select count(*) from rechte)::int r`);
-    assert.deepEqual(r, { a: 3, r: 4 });
+    assert.deepEqual(r, { a: 4, r: 4 });
   });
 
   await test('client_scopes muss Teilmenge von scopes sein', () => wirdAbgelehnt(db,
@@ -120,17 +122,17 @@ try {
     assert.equal(await zaehle(), 1);
   });
 
-  await test('datenschutz_bereinigen() anonymisiert ausgetretene Mitglieder nach Frist', async () => {
+  await test('datenschutz_bereinigen() lässt ausgetretene Mitglieder unverändert (FR-78)', async () => {
     const { rows: [alt] } = await db.query(
       `insert into mitglieder (verein_id, mitgliedsnr, vorname, nachname, austritt, status, email)
        values ($1, 2, 'Max', 'Alt', current_date - interval '4 years', 'ausgetreten', 'max@example.org')
        returning id`, [v1.id]);
     const { rows } = await db.query(`select * from datenschutz_bereinigen()`);
-    assert.ok(rows.find((r) => r.bereich === 'mitglieder' && Number(r.anzahl) === 1), JSON.stringify(rows));
+    assert.ok(!rows.find((r) => r.bereich === 'mitglieder'), JSON.stringify(rows));
     const { rows: [m] } = await db.query(`select nachname, email, anonymisiert_am from mitglieder where id = $1`, [alt.id]);
-    assert.equal(m.nachname, 'Anonymisiert');
-    assert.equal(m.email, null);
-    assert.ok(m.anonymisiert_am);
+    assert.equal(m.nachname, 'Alt');
+    assert.equal(m.email, 'max@example.org');
+    assert.equal(m.anonymisiert_am, null);
   });
 
   await db.query('commit');

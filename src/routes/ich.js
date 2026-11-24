@@ -109,7 +109,7 @@ export default async function ichRoutes(app) {
     return { ok: true, ...(passwortGeaendert && claims.muss_passwort_aendern ? { hinweis: 'Zugangstoken erneuern (Refresh), damit die Rechte gelten' } : {}) };
   });
 
-  // Konto löschen (Soft Delete; datenschutz_bereinigen() anonymisiert nach der Frist)
+  // Konto löschen (Soft Delete; die Person bleibt erhalten, FR-78)
   app.delete('/ich', {
     schema: { body: { type: 'object', additionalProperties: false, required: ['passwort'], properties: { passwort: { type: 'string', maxLength: PW_MAX } } } },
   }, async (req, reply) => {
