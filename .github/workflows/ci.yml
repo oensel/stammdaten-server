@@ -34,6 +34,7 @@ jobs:
       - name: Konfiguration aus Beispiel
         run: cp .env.example .env
       - run: npm test
+      - run: npm run db:test
 
   betrieb:
     name: Image, Compose, Sicherung und Restore-Probe

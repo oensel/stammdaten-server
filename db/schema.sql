@@ -582,8 +582,8 @@ where br.geloescht_am is null and bv.status = 'freigegeben' and bv.geloescht_am 
 -- =====================================================================================================================
 -- 9. Datenschutz: Aufbewahrungsfristen und Anonymisierung
 --
--- datenschutz_bereinigen() läuft täglich (z. B. per Cron im Server). Personendaten werden geleert, die Zeile bleibt mit
--- anonymisiert_am / geloescht_am als Löschhinweis für den Abgleich. Die Fristen sind Vorschläge und mit dem
+-- datenschutz_bereinigen() läuft täglich. Seit Migration 008 (FR-78) bleiben Personendaten erhalten; bereinigt werden nur
+-- Nebendaten (Tokens, Audit, Führungszeugnis-Einsichten). Die Fristen sind Vorschläge und mit dem
 -- Datenschutzbeauftragten bzw. Steuerberater des Vereins abzustimmen.
 -- =====================================================================================================================
 
