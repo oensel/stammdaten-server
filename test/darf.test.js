@@ -55,6 +55,18 @@ describe('darf(): Bereich × Quelle × Recht', () => {
     expect(darf(mit(quelle(B.LV1, ['mitglieder:LESEN']), quelle(B.V1, ['mitglieder:AENDERN'])), 'mitglieder:AENDERN', auf('V1'))).toBe(true);
     expect(darf(mit(quelle(B.DJB, ['mitglieder:LESEN']), quelle(B.V1, ['mitglieder:AENDERN'])), 'mitglieder:AENDERN', auf('V2'))).toBe(false);
   });
+  it('auch der Super-Admin löscht, vereinigt und ändert Judopass-Daten nicht; mit LV-Quelle schon', () => {
+    const sa = (...quellen) => baueCtx({ benutzer: { id: 'u' }, kontext: null, anwendung: 'a', jetzt: new Date(), rechte: { super_admin: true, app_scopes: ALLE, quellen } });
+    const faelle = [['mitglieder:LOESCHEN', auf('V1')], ['personen_zusammenfuehrung:AENDERN', auf('V1')], ['mitglieder:AENDERN', auf('V1', { judopassdaten: true })]];
+    for (const [recht, ziel] of faelle) {
+      expect(darf(sa(), recht, ziel)).toBe(false);
+      expect(listenbereich(sa(), recht, ziel)).toEqual({ alle: false, vereine: [], verbaende: [] });
+      expect(darf(sa(quelle(B.LV1, [recht])), recht, ziel)).toBe(true);
+      expect(listenbereich(sa(quelle(B.LV1, [recht])), recht, ziel).verbaende).toEqual(['LV1']);
+    }
+    expect(darf(sa(), 'mitglieder:AENDERN', auf('V1'))).toBe(true);
+    expect(listenbereich(sa(), 'mitglieder:LESEN').alle).toBe(true);
+  });
   it('ohne Ziel, ohne Quelle oder als Systemlauf: nein; eigene Person: nur lesen', () => {
     expect(darf(mit(quelle(B.DJB, ['mitglieder:LESEN'])), 'mitglieder:LESEN')).toBe(false);
     expect(darf(mit(), 'mitglieder:LESEN', auf('V1'))).toBe(false);
