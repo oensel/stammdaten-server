@@ -63,6 +63,7 @@ export async function seedDemo(pool, passwort) {
       }
       for (const k of z.kinder || []) {
         await c.query(`insert into erziehungsberechtigte (benutzer_id, verein_id, mitglied_id, beziehung) values ($1,$2,$3,'mutter')`, [b, verein, mitglieder[k]]);
+        await c.query(`insert into personen_zugriffe (person_id, benutzer_id, art, umfang, erteilt_am) select person_id, $1, 'erziehungsberechtigt', 'aendern', now() from mitglieder where id = $2`, [b, mitglieder[k]]);
       }
     }
     await c.query('commit');

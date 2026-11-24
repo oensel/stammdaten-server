@@ -1,1 +1,1 @@
-export const tabellen = ['personen', 'mitglieder', 'aufgaben'];
+export const tabellen = ['personen', 'mitglieder', 'aufgaben', 'personen_zugriffe'];
