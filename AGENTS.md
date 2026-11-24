@@ -26,7 +26,7 @@ Zentraler Dienst des Judo-Software-Verbunds für Anmeldung (SSO, JWKS), Verbands
 - `npm test` startet ein eigenes Wegwerf-PostgreSQL (Port 54330) und braucht keine laufende Dev-Datenbank; nie gegen die Dev-Datenbank in `.pgdata-dev` testen.
 - Die Suite dauert ca. 1 Minute; beim Iterieren einzelne Dateien laufen lassen: `npx vitest run test/<datei>.test.js`.
 - Dev-Server: zuerst `npm run db` (Port 5440, läuft im Vordergrund), einmalig `npm run db:setup`, dann `npm start` (Port 4000).
-- Eine Story ist erst fertig, wenn `npm test` vollständig grün ist.
+- Eine Story ist erst fertig, wenn `npm test` vollständig grün ist; CI (`.github/workflows/ci.yml`) prüft zusätzlich, dass keine `.env`-, Dump- oder Abzugsdateien getrackt sind.
 
 ## Conventions that differ from defaults
 
@@ -38,9 +38,5 @@ Zentraler Dienst des Judo-Software-Verbunds für Anmeldung (SSO, JWKS), Verbands
 - Audit wird im Code in derselben Transaktion geschrieben; jede auditpflichtige Aktion (NFR-18) bekommt einen Test, der den Audit-Eintrag prüft.
 - `change_seq`/`change_xid` setzt der Trigger `stammdaten_touch`; nie von Hand setzen.
 - Hintergrundjobs laufen im Worker mit Advisory-Lock, nie im Web-Prozess.
-
-## Known pitfalls
-
-- `test/sso.test.js` („GET /v1/anwendungen … nur aktive Apps“) ist seit Migration `007_weitere_apps.sql` rot: der Test erwartet 2 Apps, der Seed liefert 4. Vor der ersten Story klären, nicht als neuen Fehler werten.
 
 <!-- /bmad:context -->
