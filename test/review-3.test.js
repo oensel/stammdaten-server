@@ -43,3 +43,12 @@ it('26: parallele Anfragen überschreiten das Limit offener Anfragen nicht', asy
   expect(rs.filter((r) => r.status === 201)).toHaveLength(2);
   expect(rs.filter((r) => r.status === 429)).toHaveLength(2);
 });
+
+it('28: /v2/ich nennt keine Rechte, die die App-Obergrenze verbietet', async () => {
+  const vorher = (await t.api('GET', '/v2/ich', null, admin)).body.berechtigungen;
+  expect(vorher).toContain('zugehoerigkeit:AENDERN');
+  await q(`update anwendungen set client_scopes = '{}', scopes = array_remove(scopes, 'benutzer:verwalten') where schluessel = 'kyu-manager-pro'`);
+  const nachher = (await t.api('GET', '/v2/ich', null, admin)).body.berechtigungen;
+  expect(nachher).not.toContain('zugehoerigkeit:AENDERN');
+  expect(nachher).toContain('verbandsbaum:LESEN'); // Basisrechte bleiben
+});
