@@ -1,6 +1,9 @@
 import { notFound } from '../../errors.js';
 import * as daten from './daten.js';
-import { BASISRECHTE, KATALOG, kennt } from './katalog.js';
+import { darf, imKontext, listenbereich, projiziere } from './entscheidung.js';
+import { BASISRECHTE, KATALOG } from './katalog.js';
+
+export { darf, listenbereich, projiziere };
 
 /** Aktive Verbandsrollen eines Benutzers; die Pipeline lädt sie einmal in ctx.rechte.verbandsrollen (ctx ist dann noch null). */
 export const ladeVerbandsrollen = (_ctx, db, { benutzer_id }) => daten.verbandsrollen(db, benutzer_id);
@@ -12,26 +15,27 @@ export const rollentraeger = (_ctx, db, { verband_ids, rolle }) => daten.rollent
 export const beendeDirektrechte = (ctx, db, { benutzer_id, verein_id }) =>
   daten.direktrechteBeenden(db, { benutzerId: benutzer_id, vereinId: verein_id, von: ctx.benutzer?.id ?? null, jetzt: ctx.jetzt });
 
-// Die App-Obergrenze (scopes) gilt wie unter /v1
-const istVereinsAdmin = (ctx, { verein_id }) => ctx.rechte.super_admin
-  || (ctx.kontext?.art === 'verein' && ctx.kontext.id === verein_id && ctx.rechte.rolle === 'admin' && ctx.rechte.scopes.includes('benutzer:verwalten'));
+// Ohne Kontaktdaten: alle Verbandsrollen (E10) und Trainer (Seed-Matrix)
+const felderVon = (art, schluessel) => (art === 'verbandsrolle' || schluessel === 'trainer' ? ['stamm'] : null);
 
-const istDjbAdmin = (ctx) => ctx.rechte.super_admin || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'djb_admin');
+/** Quellen des aktiven Kontexts; die Pipeline lädt sie einmal in ctx.rechte.quellen. Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
+export async function ladeQuellen(_ctx, db, { kontext, rolle, rechte = [], verbandsrollen = [] }) {
+  if (!kontext) return [];
+  const art = kontext.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle';
+  const schluessel = art === 'vereinsrolle' ? [rolle, ...rechte.filter((r) => r !== 'pruefer')] : verbandsrollen.map((r) => r.rolle);
+  const rollen = await daten.rollenMitRechten(db, schluessel);
+  const ebene = kontext.art === 'verband' ? EBENEN[await daten.ebene(db, kontext.id)] : undefined;
+  const bereich = Object.freeze(ebene ? { ...kontext, ebene } : { ...kontext });
+  return rollen
+    .map((r) => imKontext({ art, schluessel: r.schluessel, rechte: r.rechte, bereich, felder: felderVon(art, r.schluessel) }, kontext))
+    .filter(Boolean).map(Object.freeze);
+}
+const EBENEN = { 1: 'dachverband', 2: 'landesverband', 3: 'bezirk', 4: 'kreis' };
 
-const REGELN = {
-  'verbandsbaum:AENDERN': istDjbAdmin,
-  'zugehoerigkeit:LESEN': istVereinsAdmin,
-  'zugehoerigkeit:AENDERN': istVereinsAdmin,
-  // ziel = { verband_id }: DJB-Admins überall, LV-Admins im eigenen Landesverband
-  'fristen:AENDERN': (ctx, { verband_id }) =>
-    istDjbAdmin(ctx) || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'lv_admin' && r.verband_id === verband_id),
-};
-
-/** Einzige Rechteentscheidung (AD-3). Ein unbekanntes Recht ist ein Programmierfehler. Ausbau in Epic 2. */
-export function darf(ctx, recht, ziel) {
-  if (!kennt(recht)) throw new Error(`Unbekanntes Recht: ${recht}`);
-  if (ctx.benutzer !== null && BASISRECHTE.includes(recht)) return true;
-  return Object.hasOwn(REGELN, recht) && REGELN[recht](ctx, ziel);
+/** Ergänzt ein Ziel um die Verbände über seinen Vereinen und Verbänden (verband_pfade). */
+export async function ladeZiel(_ctx, db, ziel) {
+  const ids = [...(ziel.vereine ?? []), ...(ziel.verbaende ?? []), ...(ziel.heimatverein_id ? [ziel.heimatverein_id] : [])];
+  return { ...ziel, vorfahren: await daten.vorfahren(db, ids) };
 }
 
 /** Wirft 404 (nie 403), wenn darf() nein sagt. */
@@ -39,15 +43,17 @@ export function verlange(ctx, recht, ziel) {
   if (!darf(ctx, recht, ziel)) throw notFound();
 }
 
+/** Wie verlange(), lädt vorher die Verbände über dem Ziel. */
+export const verlangeAuf = async (ctx, db, recht, ziel) => verlange(ctx, recht, await ladeZiel(ctx, db, ziel));
+
 /** Katalog der Rechte mit Operationen und Systemrollen (Super-Admin, Verbandsrollen, Vereins-Admins). */
 export async function katalogLesen(ctx, db) {
   if (!ctx.rechte.super_admin && !ctx.rechte.verbandsrollen.length && ctx.rechte.rolle !== 'admin') throw notFound();
   return { rechte: KATALOG, rollen: await daten.systemrollen(db) };
 }
 
-/** Wirksame Rollenschlüssel und Berechtigungen im aktiven Kontext (FR-16). Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
-export async function wirksameBerechtigungen(ctx, db) {
-  const { rolle, rechte, verbandsrollen } = ctx.rechte;
-  const rollen = [...new Set([...(rolle ? [rolle] : []), ...rechte.filter((r) => r !== 'pruefer'), ...verbandsrollen.map((r) => r.rolle)])].sort();
-  return { rollen, berechtigungen: [...new Set([...BASISRECHTE, ...await daten.berechtigungen(db, rollen)])].sort() };
+/** Wirksame Rollenschlüssel und Berechtigungen im aktiven Kontext (FR-16). */
+export function wirksameBerechtigungen(ctx) {
+  const { quellen } = ctx.rechte;
+  return { rollen: quellen.map((q) => q.schluessel).sort(), berechtigungen: [...new Set([...BASISRECHTE, ...quellen.flatMap((q) => q.rechte)])].sort() };
 }

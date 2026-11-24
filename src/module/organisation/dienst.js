@@ -2,7 +2,7 @@ import { inTransaktion } from '../../db.js';
 import { fehler, notFound } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
-import { rollentraeger, verlange } from '../rechte/dienst.js';
+import { listenbereich, rollentraeger, verlange, verlangeAuf } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 // DB-Invariante → fachlicher Fehler (AD-4)
@@ -37,7 +37,7 @@ export async function baumLesen(ctx, db) {
 }
 
 export function verbandAnlegen(ctx, db, { name, kurzname = null, typ, uebergeordnet_id = null }) {
-  verlange(ctx, 'verbandsbaum:AENDERN');
+  verlange(ctx, 'verbandsbaum:AENDERN', { global: true });
   return schreibe(db, async (c) => {
     const neu = await daten.verbandAnlegen(c, { name, kurzname, typ, uebergeordnet_id, geaendert_von: ctx.benutzer?.id });
     await audit.schreiben(ctx, c, { aktion: 'verband_angelegt', objekt_art: 'verband', objekt_id: neu.id, neu: ohneVersion(neu) });
@@ -46,7 +46,7 @@ export function verbandAnlegen(ctx, db, { name, kurzname = null, typ, uebergeord
 }
 
 export function verbandAendern(ctx, db, { id, version, aenderung }) {
-  verlange(ctx, 'verbandsbaum:AENDERN');
+  verlange(ctx, 'verbandsbaum:AENDERN', { global: true });
   return schreibe(db, async (c) => {
     const alt = await daten.verbandSperren(c, id);
     pruefeVersion(alt, version);
@@ -57,7 +57,7 @@ export function verbandAendern(ctx, db, { id, version, aenderung }) {
 }
 
 export function vereinAnlegen(ctx, db, { name, kurzname = null, vereinsnummer = null, ort = null, verband_id = null }) {
-  verlange(ctx, 'verbandsbaum:AENDERN');
+  verlange(ctx, 'verbandsbaum:AENDERN', { global: true });
   return schreibe(db, async (c) => {
     const neu = await daten.vereinAnlegen(c, { name, kurzname, vereinsnummer, ort, verband_id, geaendert_von: ctx.benutzer?.id });
     await audit.schreiben(ctx, c, { aktion: 'verein_angelegt', objekt_art: 'verein', objekt_id: neu.id, neu: ohneVersion(neu) });
@@ -77,7 +77,7 @@ async function meldeVerbandswechsel(ctx, c, verein, altLv) {
 }
 
 export function vereinAendern(ctx, db, { id, version, aenderung }) {
-  verlange(ctx, 'verbandsbaum:AENDERN');
+  verlange(ctx, 'verbandsbaum:AENDERN', { global: true });
   return schreibe(db, async (c) => {
     const alt = await daten.vereinSperren(c, id);
     pruefeVersion(alt, version);
@@ -107,8 +107,8 @@ export async function fristenLesen(ctx, db, { verband_id }) {
 }
 
 /** DJB setzt den Standard, ein Landesverband überschreibt für sein Gebiet. */
-export function fristSetzen(ctx, db, { verband_id, art, wert }) {
-  verlange(ctx, 'fristen:AENDERN', { verband_id });
+export async function fristSetzen(ctx, db, { verband_id, art, wert }) {
+  await verlangeAuf(ctx, db, 'fristen:AENDERN', { verbaende: [verband_id] });
   return schreibe(db, async (c) => {
     const ziel = await daten.verbandLesen(c, verband_id);
     if (!ziel) throw notFound();
@@ -120,4 +120,14 @@ export function fristSetzen(ctx, db, { verband_id, art, wert }) {
     await audit.schreiben(ctx, c, { aktion: 'frist_geaendert', objekt_art: 'frist', objekt_id: id, alt: alt && { art, verband_id, ...alt }, neu: { art, verband_id, ...neu } });
     return { art, ...neu, quelle_verband_id: verbandId };
   });
+}
+
+/** Vereine, die der Benutzer im aktiven Kontext lesen darf (genau die Zeilen, die vereinLesen erlaubt). */
+export const vereineLesen = async (ctx, db) => ({ vereine: await daten.vereineImBereich(db, listenbereich(ctx, 'vereine:LESEN')) });
+
+export async function vereinLesen(ctx, db, { id }) {
+  await verlangeAuf(ctx, db, 'vereine:LESEN', { vereine: [id] });
+  const verein = await daten.vereinLesen(db, id);
+  if (!verein) throw notFound();
+  return verein;
 }

@@ -63,7 +63,7 @@ it('weist Bezirk, Kreis und Verein ab, auch für den DJB-Admin und direkt in der
 });
 
 it('weist fremde LV, den DJB-Standard durch LV-Admins und Benutzer ohne Rolle ab', async () => {
-  for (const [token, id] of [[lv, b.lv], [lv, a.djb], [lv, a.bezirk], [mitglied, a.lv], [mitglied, a.djb]]) expect((await setze(token, id, 3)).status).toBe(404);
+  for (const [token, id] of [[lv, b.lv], [lv, a.djb], [lv, b.bezirk], [mitglied, a.lv], [mitglied, a.djb]]) expect((await setze(token, id, 3)).status).toBe(404);
 });
 
 it('prüft Eingaben und unbekannte Arten', async () => {

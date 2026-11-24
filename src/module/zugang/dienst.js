@@ -3,7 +3,7 @@ import { conflict, fehler, notFound, tooMany } from '../../errors.js';
 import { hashSecret, neuesToken, pruefeNeuesPasswort, sha256 } from '../../passwords.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
-import { beendeDirektrechte, ladeVerbandsrollen, verlange, wirksameBerechtigungen } from '../rechte/dienst.js';
+import { beendeDirektrechte, ladeVerbandsrollen, verlangeAuf, wirksameBerechtigungen } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 const MAX_OFFEN = 100; // offene Anfragen je Verein: begrenzt Missbrauch eines weitergegebenen Codes
@@ -53,8 +53,8 @@ export async function registrieren(ctx, db, { token, benutzername, vorname, nach
   }
 }
 
-export function qrCodeAnlegen(ctx, db, { verein_id, gueltig_tage = 90 }) {
-  verlange(ctx, 'zugehoerigkeit:AENDERN', { verein_id });
+export async function qrCodeAnlegen(ctx, db, { verein_id, gueltig_tage = 90 }) {
+  await verlangeAuf(ctx, db, 'zugehoerigkeit:AENDERN', { vereine: [verein_id] });
   return inTransaktion(db, async (c) => {
     const token = neuesToken();
     const ablauf = new Date(ctx.jetzt.getTime() + gueltig_tage * 86_400_000);
@@ -64,19 +64,19 @@ export function qrCodeAnlegen(ctx, db, { verein_id, gueltig_tage = 90 }) {
 }
 
 export async function qrCodesLesen(ctx, db, { verein_id }) {
-  verlange(ctx, 'zugehoerigkeit:LESEN', { verein_id });
+  await verlangeAuf(ctx, db, 'zugehoerigkeit:LESEN', { vereine: [verein_id] });
   return { qr_codes: await daten.qrListe(db, verein_id) };
 }
 
 export async function qrCodeWiderrufen(ctx, db, { verein_id, id }) {
-  verlange(ctx, 'zugehoerigkeit:AENDERN', { verein_id });
+  await verlangeAuf(ctx, db, 'zugehoerigkeit:AENDERN', { vereine: [verein_id] });
   const qr = await daten.qrWiderrufen(db, { id, vereinId: verein_id, jetzt: ctx.jetzt });
   if (!qr) throw notFound();
   return qr;
 }
 
 export async function zugehoerigkeitenLesen(ctx, db, { verein_id, status = null }) {
-  verlange(ctx, 'zugehoerigkeit:LESEN', { verein_id });
+  await verlangeAuf(ctx, db, 'zugehoerigkeit:LESEN', { vereine: [verein_id] });
   return { zugehoerigkeiten: await daten.liste(db, { vereinId: verein_id, status }) };
 }
 
@@ -87,8 +87,8 @@ const ENTSCHEIDUNGEN = {
   entziehen: [['freigegeben'], 'gesperrt', 'recht_entzogen'],
 };
 
-export function zugehoerigkeitEntscheiden(ctx, db, { verein_id, id, version, entscheidung, grund = null }) {
-  verlange(ctx, 'zugehoerigkeit:AENDERN', { verein_id });
+export async function zugehoerigkeitEntscheiden(ctx, db, { verein_id, id, version, entscheidung, grund = null }) {
+  await verlangeAuf(ctx, db, 'zugehoerigkeit:AENDERN', { vereine: [verein_id] });
   const [erlaubt, status, aktion] = ENTSCHEIDUNGEN[entscheidung];
   return inTransaktion(db, async (c) => {
     const alt = await daten.sperren(c, { id, vereinId: verein_id });
@@ -111,7 +111,7 @@ export async function ichLesen(ctx, db) {
   for (const r of await ladeVerbandsrollen(ctx, db, { benutzer_id: ctx.benutzer.id })) (verbaende[r.verband_id] ??= []).push(r.rolle);
   return {
     benutzer_id: ctx.benutzer.id, kontext: ctx.kontext, super_admin: ctx.rechte.super_admin,
-    ...await wirksameBerechtigungen(ctx, db),
+    ...wirksameBerechtigungen(ctx),
     kontexte: {
       vereine: await daten.freigegebeneVereine(db, ctx.benutzer.id),
       verbaende: Object.entries(verbaende).map(([id, rollen]) => ({ id, rollen: rollen.sort() })),

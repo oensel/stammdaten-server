@@ -45,3 +45,10 @@ export const fristLesen = (db, art, verbandId) => eine(db, 'select wert, einheit
 export const fristSetzen = (db, { art, verbandId, wert, einheit }) => eine(db,
   `insert into fristen (art, verband_id, wert, einheit) values ($1,$2,$3,$4)
    on conflict on constraint fristen_art_verband_uq do update set wert = excluded.wert returning id, wert, einheit`, [art, verbandId, wert, einheit]);
+
+export const vereinLesen = (db, id) => eine(db, `select ${VEREIN} from vereine where id = $1 and geloescht_am is null`, [id]);
+export const vereineImBereich = async (db, { alle, vereine, verbaende }) => (await db.query(
+  `select ${VEREIN} from vereine
+    where geloescht_am is null and ($1 or id = any($2::uuid[])
+       or exists (select 1 from verband_pfade p where p.nachfahr_id = vereine.id and p.vorfahr_id = any($3::uuid[])))
+    order by lower(name), id`, [alle, vereine, verbaende])).rows;
