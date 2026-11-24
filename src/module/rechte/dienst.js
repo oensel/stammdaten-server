@@ -3,7 +3,7 @@ import { fehler, notFound } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as daten from './daten.js';
 import { darf, darfFelder, imKontext, listenbereich, projiziere } from './entscheidung.js';
-import { BASISRECHTE, KATALOG } from './katalog.js';
+import { BASISRECHTE, KATALOG, kennt } from './katalog.js';
 
 export { darf, darfFelder, listenbereich, projiziere };
 
@@ -18,7 +18,7 @@ export const beendeDirektrechte = (ctx, db, { benutzer_id, verein_id }) =>
   daten.direktrechteBeenden(db, { benutzerId: benutzer_id, vereinId: verein_id, von: ctx.benutzer?.id ?? null, jetzt: ctx.jetzt });
 
 /** Quellen des aktiven Kontexts; die Pipeline lädt sie einmal in ctx.rechte.quellen. Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
-export async function ladeQuellen(_ctx, db, { kontext, rolle, rechte = [], verbandsrollen = [] }) {
+export async function ladeQuellen(_ctx, db, { kontext, benutzerId, rolle, rechte = [], verbandsrollen = [] }) {
   if (!kontext) return [];
   const art = kontext.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle';
   const schluessel = art === 'vereinsrolle' ? [rolle, ...rechte.filter((r) => r !== 'pruefer')] : verbandsrollen.map((r) => r.rolle);
@@ -27,7 +27,8 @@ export async function ladeQuellen(_ctx, db, { kontext, rolle, rechte = [], verba
   for (const r of verbandsrollen) if (!r.stellvertreter_von) nurStv.delete(r.rolle);
   const ohneDelegieren = (r) => (nurStv.has(r.schluessel)
     ? { ...r, rechte: r.rechte.filter((x) => !x.endsWith(':DELEGIEREN')), filter: Object.fromEntries(Object.entries(r.filter).filter(([k]) => !k.endsWith(':DELEGIEREN'))) } : r);
-  const rollen = (await daten.rollenMitRechten(db, [...new Set(schluessel)])).map(ohneDelegieren);
+  const eigene = art === 'vereinsrolle' && benutzerId ? await daten.eigeneRollenMitRechten(db, { benutzerId, vereinId: kontext.id }) : [];
+  const rollen = [...(await daten.rollenMitRechten(db, [...new Set(schluessel)])).map(ohneDelegieren), ...eigene];
   const ebene = kontext.art === 'verband' ? EBENEN[await daten.ebene(db, kontext.id)] : undefined;
   const bereich = Object.freeze(ebene ? { ...kontext, ebene } : { ...kontext });
   return rollen
@@ -160,5 +161,84 @@ export async function stellvertreterEntziehen(ctx, db, { verband_id, id, stellve
     const ende = await daten.rolleBeenden(c, { id: stellvertreter_id, von: ctx.benutzer.id, grund, jetzt: ctx.jetzt });
     await audit.schreiben(ctx, c, { aktion: 'stellvertreter_entzogen', objekt_art: 'verbandsrolle', objekt_id: stellvertreter_id, alt: ende, grund });
     return ende;
+  });
+}
+
+// ---- vereinseigene Rollen (FR-21, E98, Story 2.7) ----
+Object.assign(VERSTOSS, {
+  vereinsrolle_recht_nicht_erlaubt: [422, 'Dieses Recht ist in vereinseigenen Rollen nicht erlaubt', 'recht_nicht_erlaubt'],
+  vereinsrolle_fremd: [404, 'Rolle nicht gefunden', 'nicht_gefunden'],
+  vereinsrolle_kein_mitglied: [422, 'Der Benutzer gehört dem Verein nicht an', 'kein_vereinsmitglied'],
+  benutzer_vereinsrollen_uq: [409, 'Der Benutzer hat diese Rolle schon', 'rolle_vergeben'],
+  rollen_schluessel_uq: [409, 'Eine Rolle mit diesem Namen gibt es schon', 'name_vergeben'],
+});
+
+const kuerzel = (name) => `eigen_${name.toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 50)}`;
+
+/** Jedes Recht muss im Katalog stehen und vom Vergebenden selbst gehalten und delegierbar sein; die Positivliste prüft die Datenbank. */
+async function pruefeBerechtigungen(ctx, db, verein_id, berechtigungen) {
+  const ziel = await ladeZiel(ctx, db, { vereine: [verein_id] });
+  const erlaubt = await daten.positivliste(db);
+  for (const b of berechtigungen) {
+    if (!kennt(b)) throw fehler(422, `Unbekanntes Recht: ${b}`, 'recht_unbekannt');
+    const [recht, operation] = b.split(':');
+    if (operation === 'DELEGIEREN' || !erlaubt.includes(recht)) throw fehler(422, `Das Recht ${b} ist in vereinseigenen Rollen nicht erlaubt`, 'recht_nicht_erlaubt');
+    if (!kennt(`${recht}:DELEGIEREN`) || !darf(ctx, b, ziel) || !darf(ctx, `${recht}:DELEGIEREN`, ziel)) throw fehler(422, `Das Recht ${b} darfst du nicht delegieren`, 'recht_nicht_delegierbar');
+  }
+}
+
+export async function vereinsrollenLesen(ctx, db, { verein_id }) {
+  await verlangeAuf(ctx, db, 'rolle:LESEN', { vereine: [verein_id] });
+  return { rollen: await daten.vereinsrollenLesen(db, verein_id) };
+}
+
+export async function vereinsrolleAnlegen(ctx, db, { verein_id, name, berechtigungen }) {
+  await verlangeAuf(ctx, db, 'rolle:ANLEGEN', { vereine: [verein_id] });
+  await pruefeBerechtigungen(ctx, db, verein_id, berechtigungen);
+  return schreibe(db, async (c) => {
+    const rolle = await daten.vereinsrolleAnlegen(c, { vereinId: verein_id, schluessel: kuerzel(name), name });
+    await daten.berechtigungenErsetzen(c, { rolleId: rolle.id, berechtigungen });
+    return { ...rolle, berechtigungen: [...berechtigungen].sort(), vergeben: 0 };
+  });
+}
+
+export async function vereinsrolleAendern(ctx, db, { verein_id, id, name, berechtigungen }) {
+  await verlangeAuf(ctx, db, 'rolle:AENDERN', { vereine: [verein_id] });
+  if (berechtigungen) await pruefeBerechtigungen(ctx, db, verein_id, berechtigungen);
+  return schreibe(db, async (c) => {
+    if (!await daten.vereinsrolleSperren(c, { id, vereinId: verein_id })) throw notFound();
+    if (name) await daten.vereinsrolleUmbenennen(c, { id, name });
+    if (berechtigungen) await daten.berechtigungenErsetzen(c, { rolleId: id, berechtigungen });
+    return (await daten.vereinsrollenLesen(c, verein_id)).find((r) => r.id === id);
+  });
+}
+
+export async function vereinsrolleLoeschen(ctx, db, { verein_id, id }) {
+  await verlangeAuf(ctx, db, 'rolle:LOESCHEN', { vereine: [verein_id] });
+  return schreibe(db, async (c) => {
+    if (!await daten.vereinsrolleSperren(c, { id, vereinId: verein_id })) throw notFound();
+    if (await daten.vereinsrolleVergeben(c, { rolleId: id, vereinId: verein_id })) throw fehler(409, 'Die Rolle ist vergeben und lässt sich nicht löschen', 'rolle_vergeben');
+    await daten.vereinsrolleLoeschen(c, id);
+    return { id, geloescht: true };
+  });
+}
+
+export async function vereinsrolleZuweisen(ctx, db, { verein_id, id, benutzer_id }) {
+  await verlangeAuf(ctx, db, 'rolle:AENDERN', { vereine: [verein_id] });
+  return schreibe(db, async (c) => {
+    if (!await daten.vereinsrolleSperren(c, { id, vereinId: verein_id })) throw notFound();
+    const neu = await daten.vereinsrolleZuweisen(c, { benutzerId: benutzer_id, vereinId: verein_id, rolleId: id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+    await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'vereinsrolle', objekt_id: neu.id, neu });
+    return neu;
+  });
+}
+
+export async function vereinsrolleEntziehen(ctx, db, { verein_id, id, benutzer_id }) {
+  await verlangeAuf(ctx, db, 'rolle:AENDERN', { vereine: [verein_id] });
+  return schreibe(db, async (c) => {
+    const alt = await daten.vereinsrolleEntziehen(c, { benutzerId: benutzer_id, vereinId: verein_id, rolleId: id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+    if (!alt) throw notFound();
+    await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'vereinsrolle', objekt_id: alt.id, alt });
+    return alt;
   });
 }
