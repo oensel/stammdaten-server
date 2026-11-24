@@ -78,3 +78,31 @@ it('Antworten und Claims entsprechen dem Vertrag', async () => {
   if (process.env.VERTRAG_SCHREIBEN) await writeFile(DATEI, `${JSON.stringify(ist, null, 1)}\n`);
   expect(ist).toEqual(JSON.parse(await readFile(DATEI, 'utf8')));
 });
+
+// nach dem Formvergleich, weil dieser Test Daten anlegt
+it('Fehlercodes, Werte und DELETE entsprechen dem Vertrag', async () => {
+  const verein = (await t.pool.query(`select id from vereine where name = 'JC Demo'`)).rows[0].id;
+  const mitglied = (await t.pool.query('select id from mitglieder where verein_id = $1 and mitgliedsnr = 2', [verein])).rows[0].id;
+  const l = (await t.login('trainer1')).body;
+  expect(l).toMatchObject({ token_type: 'Bearer', expires_in: 600 });
+  const c = teil(l.access_token, 1);
+  expect(c).toMatchObject({ iss: 'http://stammdaten.test', azp: CLIENT, rolle: 'mitglied', rechte: ['trainer'], verein_id: verein, super_admin: false });
+  expect(Object.keys(c.vereine)).toEqual([verein]);
+  expect(c.scope.split(' ')).toEqual(expect.arrayContaining(['mitglieder:lesen', 'benutzer:schueler']));
+  expect(teil(l.access_token, 0)).toMatchObject({ alg: 'EdDSA' });
+
+  const app = (await t.api('POST', '/oauth/token', { grant_type: 'client_credentials', client_id: CLIENT, client_secret: cfgDefault.demoClientSecret })).body.access_token;
+  const post = (x) => t.api('POST', '/v1/graduierungen', { verein_id: verein, mitglied_id: mitglied, art: 'kyu', stufe: 7, datum: '2025-03-01', ...x }, app);
+  const code = async (r, status, erwartet) => expect({ status: (await r).status, code: (await r).body.code }).toEqual({ status, code: erwartet });
+  const { id } = (await post()).body;
+  expect((await post()).status).toBe(200);
+  await code(post({ stufe: 10 }), 400, 'stufe_ungueltig');
+  await code(post({ mitglied_id: verein }), 404, 'mitglied_unbekannt');
+  expect((await t.api('DELETE', `/v1/graduierungen/${id}?verein_id=${verein}`, null, app)).status).toBe(204);
+  await code(t.api('DELETE', `/v1/graduierungen/${verein}?verein_id=${verein}`, null, app), 404, 'graduierung_unbekannt');
+  await code(t.api('GET', `/v1/abgleich?verein_id=${verein}&seit=kaputt`, null, app), 409, 'abgleich_neu_starten');
+  await code(t.api('GET', `/v1/abgleich?verein_id=${mitglied}`, null, app), 403, 'verein_nicht_freigegeben');
+  await code(t.api('GET', `/v1/abgleich?verein_id=${verein}`, null, l.access_token), 403, 'nur_anwendung');
+  await code(t.login('trainer1', {}, 'falsch-falsch'), 401, 'anmeldung_fehlgeschlagen');
+  await code(t.refresh('x'.repeat(43)), 401, 'ungueltiges_token');
+});

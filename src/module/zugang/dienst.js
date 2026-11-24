@@ -1,6 +1,6 @@
 import { inTransaktion } from '../../db.js';
-import { conflict, fehler, notFound, tooMany } from '../../errors.js';
-import { hashSecret, neuesToken, pruefeNeuesPasswort, sha256 } from '../../passwords.js';
+import { conflict, fehler, notFound, tooMany, unauthorized } from '../../errors.js';
+import { hashSecret, neuesToken, pruefeNeuesPasswort, sha256, verifyDummy, verifySecret } from '../../passwords.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
 import { beendeDirektrechte, ladeVerbandsrollen, verlangeAuf, wirksameBerechtigungen } from '../rechte/dienst.js';
@@ -20,6 +20,7 @@ async function anfrageAnlegen(ctx, c, { benutzer_id, verein_id }) {
   const neu = await daten.anfragen(c, { benutzerId: benutzer_id, vereinId: verein_id });
   if (!neu) throw conflict('Die Zugehörigkeit besteht oder ist schon angefragt', 'zugehoerigkeit_vorhanden');
   await beendeDirektrechte(ctx, c, { benutzer_id, verein_id });
+  await daten.mitgliedsbezuegeBeenden(c, { benutzerId: benutzer_id, vereinId: verein_id, jetzt: ctx.jetzt });
   const n = await daten.benutzerName(c, benutzer_id);
   await benachrichtigung.senden(ctx, c, {
     empfaenger: await daten.vereinsAdmins(c, verein_id), art: 'zugehoerigkeit_angefragt',
@@ -31,6 +32,24 @@ async function anfrageAnlegen(ctx, c, { benutzer_id, verein_id }) {
 /** FR-14: ein bestehender Benutzer scannt den QR-Code eines Vereins. Rechte wirken erst nach der Freigabe. */
 export const zugehoerigkeitAnfragen = (ctx, db, { token }) => inTransaktion(db, async (c) =>
   anfrageAnlegen(ctx, c, { benutzer_id: ctx.benutzer.id, verein_id: await pruefeQr(ctx, c, token) }));
+
+/** Wie zugehoerigkeitAnfragen, für Konten ohne freigegebenen Verein: mit Passwort statt Token, stellt keine Sitzung aus. */
+export async function anfragenMitPasswort(ctx, db, { token, benutzername, passwort, cfg }) {
+  const falsch = () => unauthorized('Benutzername oder Passwort falsch', 'anmeldung_fehlgeschlagen');
+  await inTransaktion(db, (c) => pruefeQr(ctx, c, token));
+  const konto = await daten.kontoFuerAnmeldung(db, { kennung: benutzername.trim(), jetzt: ctx.jetzt });
+  if (!konto) { await verifyDummy(passwort); throw falsch(); }
+  if (konto.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
+  if (!await verifySecret(konto.passwort_hash, passwort)) {
+    await daten.fehlversuch(db, { id: konto.id, max: cfg.maxFehlversuche, sperreBis: new Date(ctx.jetzt.getTime() + cfg.sperreMinuten * 60_000) });
+    throw falsch();
+  }
+  return inTransaktion(db, async (c) => {
+    await daten.fehlversucheZuruecksetzen(c, konto.id);
+    const { verein_id, status } = await anfrageAnlegen(ctx, c, { benutzer_id: konto.id, verein_id: await pruefeQr(ctx, c, token) });
+    return { verein_id, status };
+  });
+}
 
 /**
  * Öffentliche Registrierung mit QR-Code. Ohne E-Mail: Eine ungeprüfte fremde Adresse würde dem Konto später deren Einladung
@@ -100,7 +119,11 @@ export async function zugehoerigkeitEntscheiden(ctx, db, { verein_id, id, versio
     await beendeDirektrechte(ctx, c, { benutzer_id: alt.benutzer_id, verein_id });
     const neu = await daten.entscheiden(c, { id, status, rolle: 'mitglied', von: ctx.benutzer.id, jetzt: ctx.jetzt });
     // Eine ältere Einladung darf die Entscheidung nicht wieder aufheben; eine spätere ist ein neuer Entschluss des Vereins
-    if (status !== 'freigegeben') await daten.einladungenVerbrauchen(c, { benutzerId: alt.benutzer_id, vereinId: verein_id, jetzt: ctx.jetzt });
+    if (status !== 'freigegeben') {
+      const ziel = { benutzerId: alt.benutzer_id, vereinId: verein_id, jetzt: ctx.jetzt };
+      await daten.einladungenVerbrauchen(c, ziel);
+      await daten.mitgliedsbezuegeBeenden(c, ziel);
+    }
     const bild = ({ rolle, status: s }) => ({ benutzer_id: alt.benutzer_id, verein_id, rolle, status: s });
     await audit.schreiben(ctx, c, { aktion, objekt_art: 'vereinszugehoerigkeit', objekt_id: id, alt: bild(alt), neu: bild(neu), grund });
     return neu;

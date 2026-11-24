@@ -1,7 +1,10 @@
 // Anmelde-Kern: Kontext (Verein, Rolle, Rechte, Mitglieder) laden, Access-/Refresh-Token ausstellen, rotieren, widerrufen.
 import { randomUUID } from 'node:crypto';
+import { inTransaktion } from './db.js';
 import { conflict, fehler, forbidden, unauthorized } from './errors.js';
 import { signJwt, verifyJwt } from './jwt.js';
+import * as audit from './module/audit/dienst.js';
+import { baueCtx } from './pipeline/ctx.js';
 import { ladeVerbandsrollen } from './module/rechte/dienst.js';
 import { neuesToken, sha256 } from './passwords.js';
 import { wirksameScopes } from './scopes.js';
@@ -76,6 +79,12 @@ export async function ladeVerbandskontext(db, benutzer, verbandId) {
 
 /** Hat der Benutzer eine aktive Verbandsrolle? Solche Konten darf ein Verein nicht zurücksetzen. */
 export const hatVerbandsrolle = async (db, id) => (await ladeVerbandsrollen(null, db, { benutzer_id: id })).length > 0;
+
+/** Audit der Altwege (NFR-18): Akteur, Rolle und Verein aus den Claims. Immer in der Transaktion der Änderung. */
+export const auditiere = (db, claims, eintrag) => audit.schreiben(baueCtx({
+  benutzer: { id: claims.sub }, kontext: claims.verein_id ? { art: 'verein', id: claims.verein_id } : null,
+  rechte: { rolle: claims.rolle ?? null, super_admin: !!claims.super_admin }, anwendung: claims.azp || claims.aud, jetzt: new Date(),
+}), db, eintrag);
 
 /** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
 export const ladeMailAdresse = async (db, id) =>
@@ -194,14 +203,22 @@ export async function stelleAus(app, db, { benutzer, kontext, anwendung, sitzung
   };
 }
 
-export const widerrufeFamilie = (db, familieId) =>
-  db.query('update refresh_tokens set widerrufen_am = now() where familie_id = $1 and widerrufen_am is null', [familieId]);
+// Rotation und Widerruf eines Benutzers laufen nacheinander; sonst übersähe ein Widerruf das gerade entstehende Refresh-Token.
+const sperreSitzungen = (db, benutzerId) => db.query('select pg_advisory_xact_lock(hashtextextended($1, 1))', [`sitzungen:${benutzerId}`]);
+
+export const widerrufeFamilie = (db, familieId) => inTransaktion(db, async (c) => {
+  const b = (await c.query('select benutzer_id from refresh_tokens where familie_id = $1 limit 1', [familieId])).rows[0];
+  if (b) await sperreSitzungen(c, b.benutzer_id);
+  return c.query('update refresh_tokens set widerrufen_am = now() where familie_id = $1 and widerrufen_am is null', [familieId]);
+});
 /** Alle Anmeldungen des Benutzers beenden; liefert die Sitzungen (familie_id), die dabei neu widerrufen wurden (ohne Geräte-Anmeldungen). */
-export const widerrufeAlle = async (db, benutzerId, ausserFamilie = null) =>
-  [...new Set((await db.query(
+export const widerrufeAlle = (db, benutzerId, ausserFamilie = null) => inTransaktion(db, async (c) => {
+  await sperreSitzungen(c, benutzerId);
+  return [...new Set((await c.query(
     `update refresh_tokens set widerrufen_am = now() where benutzer_id = $1 and widerrufen_am is null and ($2::uuid is null or familie_id <> $2)
       returning familie_id, art`,
     [benutzerId, ausserFamilie])).rows.filter((r) => r.art !== 'geraet').map((r) => r.familie_id))];
+});
 
 /**
  * Refresh mit Rotation. Wiederverwendung eines schon rotierten Tokens widerruft die ganze Familie.
@@ -268,6 +285,7 @@ export async function rotiere(app, refreshToken, { clientId = null, vereinId = n
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await sperreSitzungen(client, rt.benutzer_id);
     const claim = await client.query('update refresh_tokens set widerrufen_am = now() where id = $1 and widerrufen_am is null returning id', [rt.id]);
     if (!claim.rows[0]) { await client.query('rollback'); throw unauthorized('Token wurde gerade erneuert', 'token_ersetzt'); }
     const out = await stelleAus(app, client, {

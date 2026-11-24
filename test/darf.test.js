@@ -2,16 +2,19 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { imKontext, darf, listenbereich, projiziere } from '../src/module/rechte/entscheidung.js';
+import { KATALOG } from '../src/module/rechte/katalog.js';
+import { scopeFuer } from '../src/module/rechte/obergrenze.js';
 import { baueCtx, systemCtx } from '../src/pipeline/ctx.js';
 import { gibRolle, verbandsbaum, verbandsToken, verein } from './fabrik.js';
 import { neueApp } from './helper.js';
 
+const ALLE = Object.entries(KATALOG).flatMap(([n, ops]) => ops.map((o) => scopeFuer(`${n}:${o}`)));
 // Baum: DJB > LV1 > K1 > V1 und DJB > LV2 > K2 > V2
 const vorfahren = { V1: ['K1', 'LV1', 'DJB'], V2: ['K2', 'LV2', 'DJB'], LV1: ['LV1', 'DJB'], K1: ['K1', 'LV1', 'DJB'] };
 const auf = (v, extra = {}) => ({ vereine: [v], heimatverein_id: v, vorfahren, ...extra });
 const B = { V1: { art: 'verein', id: 'V1' }, LV1: { art: 'verband', id: 'LV1', ebene: 'landesverband' }, K1: { art: 'verband', id: 'K1', ebene: 'kreis' }, DJB: { art: 'verband', id: 'DJB', ebene: 'dachverband' } };
 const quelle = (bereich, rechte, art = bereich.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle', felder = art === 'verbandsrolle' ? ['stamm'] : null) => ({ art, schluessel: 'x', rechte, bereich, felder });
-const mit = (...quellen) => baueCtx({ benutzer: { id: 'u' }, kontext: { art: 'verein', id: 'V1' }, anwendung: 'a', jetzt: new Date(), rechte: { quellen, scopes: ['benutzer:verwalten'] } });
+const mit = (...quellen) => baueCtx({ benutzer: { id: 'u' }, kontext: { art: 'verein', id: 'V1' }, anwendung: 'a', jetzt: new Date(), rechte: { quellen, app_scopes: ALLE } });
 
 describe('darf(): Bereich × Quelle × Recht', () => {
   it.each([

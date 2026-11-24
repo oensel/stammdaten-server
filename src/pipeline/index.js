@@ -1,5 +1,5 @@
 // Anfrage-Pipeline für /v2 (AD-2, AD-9): Token → Kontext → ctx → genau ein Dienst; Fehler als Problem-JSON.
-import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, pruefeBearer } from '../auth.js';
+import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, pruefeBearer } from '../auth.js';
 import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
@@ -30,22 +30,24 @@ async function ladeCtx(app, req) {
   // Geräte-Tokens (PIN am Tablet) tragen keine Verbands- und Super-Admin-Rechte
   if (claims.geraet_id) benutzer.ist_super_admin = false;
   const alleVerbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
+  const app_scopes = anwendung.scopes;
   const basis = { benutzer: Object.freeze({ id: benutzer.id }), anwendung: anwendung.schluessel, jetzt };
   const vereinId = gewaehlt || claims.verein_id;
   // FR-15: genau ein Kontext. Verbandsrollen wirken nur im Kontext ihres Verbands, Vereinsrechte nur im Verein.
   if (!gewaehlt && claims.kontext?.art === 'verband') {
     const verbandsrollen = alleVerbandsrollen.filter((r) => r.verband_id === claims.kontext.id);
-    if (!verbandsrollen.length) throw notFound();
+    // frisch geprüft: Rolle und Zugehörigkeit zu einem Verein (FR-14)
+    if (!verbandsrollen.length || !await ladeVerbandskontext(app.pool, benutzer, claims.kontext.id)) throw notFound();
     const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
     const quellen = await ladeQuellen(null, app.pool, { kontext, verbandsrollen });
     return baueCtx({ ...basis, kontext, rechte: {
-      quellen, verbandsrollen, super_admin: benutzer.ist_super_admin,
+      app_scopes, quellen, verbandsrollen, super_admin: benutzer.ist_super_admin,
       scopes: benutzer.ist_super_admin ? wirksameScopes({ superAdmin: true }, anwendung.scopes) : [],
     } });
   }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
-    return baueCtx({ ...basis, rechte: { super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
+    return baueCtx({ ...basis, rechte: { app_scopes, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
   }
   let k;
   try {
@@ -58,6 +60,7 @@ async function ladeCtx(app, req) {
   return baueCtx({
     ...basis, kontext,
     rechte: {
+      app_scopes,
       quellen: await ladeQuellen(null, app.pool, { kontext, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
@@ -92,7 +95,7 @@ export async function registriereV2(app, definiere) {
     definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, handler }) => scope.route({
       method, url, schema, config: { oeffentlich },
       handler: async (req, reply) => {
-        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
+        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, cfg: app.cfg, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
         if (ergebnis?.change_seq) reply.header('ETag', `"${ergebnis.change_seq}"`);
         reply.status(status);
         return ergebnis;

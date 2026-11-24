@@ -35,3 +35,12 @@ export async function migrate(pool) {
   }
   return angewendet;
 }
+
+/** Wirft, wenn Migrationen ausstehen (API und Worker starten nie auf altem Schema). */
+export async function verlangeAktuellesSchema(pool) {
+  const alle = ['schema.sql', ...(await readdir(path.join(dbDir, 'migrations'))).filter((f) => f.endsWith('.sql'))];
+  const da = (await pool.query(`select to_regclass('schema_migrationen') is not null as da`)).rows[0].da;
+  const done = new Set(da ? (await pool.query('select name from schema_migrationen')).rows.map((r) => r.name) : []);
+  const offen = alle.filter((f) => !done.has(f));
+  if (offen.length) throw new Error(`Ausstehende Migrationen (${offen.join(', ')}) – zuerst npm run db:migrieren`);
+}

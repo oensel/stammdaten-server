@@ -12,6 +12,8 @@ export const verein = (db, kreisId, name = `Verein ${kuerzel()}`) =>
 
 /** Legt LV → Bezirk → Kreis → Verein unter dem (einzigen) DJB an; den DJB nur, wenn er fehlt. Liefert die IDs. */
 export async function verbandsbaum(db) {
+  // keine App darf Verbände von Haus aus verwalten (App-Obergrenze); im Test die Demo-App schon
+  await db.query(`update anwendungen set scopes = scopes || '{verband:verwalten}' where schluessel = 'kyu-manager-pro' and not scopes @> '{verband:verwalten}'`);
   const da = (await db.query(`select id from verbaende where typ = 'dachverband'`)).rows[0]?.id;
   const djb = da ?? await verband(db, 'dachverband', null, 'DJB');
   const lv = await verband(db, 'landesverband', djb);

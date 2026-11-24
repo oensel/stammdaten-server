@@ -4,6 +4,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ALT_SQL } from './konformitaet/altsql.js';
 import { ALTDATEIEN, ROUTEN_MIT_SQL } from './konformitaet/ausnahmen.js';
 import { bekannteTabellen, PFEILE, pruefe } from './konformitaet/pruefer.js';
 import { URSPRUNG_DATEIEN, URSPRUNG_ROUTEN } from './konformitaet/ursprung.js';
@@ -40,6 +41,12 @@ describe('Konformität des Projekts', () => {
     expect(ALTDATEIEN.filter((x) => !existsSync(path.join(root, x)))).toEqual([]);
   });
 
+  it('Altrouten bekommen kein neues SQL', async () => {
+    const { dateien } = await ladeProjekt();
+    const zuviel = [...dateien].filter(([d]) => d.startsWith('src/routes/')).filter(([d, s]) => (s.match(/\.query\(/g) || []).length > (ALT_SQL[d] ?? 0)).map(([d]) => d);
+    expect(zuviel).toEqual([]);
+  });
+
   it('die erlaubten Abhängigkeiten haben keinen Zyklus', () => {
     const besuche = (m, weg) => {
       expect(weg).not.toContain(m);
@@ -67,6 +74,18 @@ describe('Der Prüfer erkennt Verstöße', () => {
     ['SQL in Route', `${P}routen.js`, 'const s = `select 1 from personen`;', 'sql'],
     ['query() in Route', `${P}routen.js`, 'db.query(q)', 'sql'],
     ['SQL in Altroute', 'src/routes/x.js', `p.query('delete from personen')`, 'sql_altroute'],
+    ["query über Klammern", `${P}routen.js`, `db['query'](q)`, 'sql'],
+    ['query zerlegt', `${P}dienst.js`, 'const { query } = db; query(q)', 'sql'],
+    ['query.call', `${P}dienst.js`, 'db.query.call(db, q)', 'sql'],
+    ['eigener Datenbankzugang', `${P}dienst.js`, `import pg from 'pg';`, 'pfeil'],
+    ['createRequire', `${P}dienst.js`, `import { createRequire } from 'node:module';`, 'pfeil'],
+    ['Date()', `${P}dienst.js`, 'const d = Date();', 'zeit'],
+    ['localtimestamp', `${P}daten.js`, `'update personen set a = localtimestamp'`, 'zeit'],
+    ['Komma nach Join', `${P}daten.js`, '`select * from personen p join personen q on true, forderungen f`', 'fremde_tabelle'],
+    ['Komma nach lateral', `${P}daten.js`, '`select * from personen p, lateral (select 1) x, forderungen f`', 'fremde_tabelle'],
+    ['table-Befehl', `${P}daten.js`, `'table forderungen'`, 'fremde_tabelle'],
+    ['verkettetes SQL', `${P}daten.js`, `'select * from ' + t`, 'fremde_tabelle'],
+    ['/v2 in Altroute', 'src/routes/x.js', `app.get('/v2/neu', h)`, 'v2_altroute'],
     ['fremde Tabelle per Join', `${P}daten.js`, '`select * from personen p join forderungen f on true`', 'fremde_tabelle'],
     ['fremde Tabelle per Kommaliste', `${P}daten.js`, '`select * from personen p, forderungen f`', 'fremde_tabelle'],
     ['fremde Tabelle schreibend', `${P}daten.js`, `'insert into forderungen (a) values (1)'`, 'fremde_tabelle'],

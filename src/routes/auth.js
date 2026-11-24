@@ -224,7 +224,7 @@ export default async function authRoutes(app) {
       const kontext = await ladeKontext(db, benutzer, req.body.verein_id);
       const offen = await widerrufeFamilie(db, claims.sid);
       if (!offen.rowCount) throw unauthorized('Abgemeldet', 'abgemeldet');
-      return stelleAus(app, db, { benutzer, kontext, anwendung });
+      return stelleAus(app, db, { benutzer, kontext, anwendung, familieId: claims.sid }); // gleiche sid: Back-Channel-Logout erreicht alle Apps
     });
     reply.header('Cache-Control', 'no-store');
     return ausliefern(reply, out, web);
@@ -259,7 +259,7 @@ export default async function authRoutes(app) {
       // Nur eine noch offene Sitzung darf wechseln: ein abgemeldetes Token eröffnet keine neue
       const offen = await widerrufeFamilie(db, claims.sid);
       if (!offen.rowCount) throw unauthorized('Abgemeldet', 'abgemeldet');
-      return stelleAus(app, db, { benutzer, kontext, anwendung });
+      return stelleAus(app, db, { benutzer, kontext, anwendung, familieId: claims.sid }); // gleiche sid: Back-Channel-Logout erreicht alle Apps
     });
     reply.header('Cache-Control', 'no-store');
     return ausliefern(reply, out, web);
