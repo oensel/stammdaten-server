@@ -1,19 +1,21 @@
 services:
   db:
-    image: postgres:17
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_DB: stammdaten
       POSTGRES_USER: stammdaten
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PostgreSQL 18 legt die Daten versioniert unter /var/lib/postgresql/18/docker ab
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stammdaten"]
       interval: 5s
       retries: 10
-  app:
+  api:
     build: .
+    image: stammdaten-server:lokal
     restart: unless-stopped
     depends_on:
       db:
@@ -21,5 +23,17 @@ services:
     env_file: .env.prod
     ports:
       - "4000:4000"
+  worker:
+    # gleiches Image wie api, nur anderer Startbefehl
+    build: .
+    image: stammdaten-server:lokal
+    command: ["node", "src/worker.js"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    env_file: .env.prod
 volumes:
   pgdata:

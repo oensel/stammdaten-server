@@ -34,3 +34,102 @@ jobs:
       - name: Konfiguration aus Beispiel
         run: cp .env.example .env
       - run: npm test
+
+  betrieb:
+    name: Image, Compose, Sicherung und Restore-Probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DB_PASSWORD: ci-nur-test
+      SICHERUNG_VERZEICHNIS: ${{ github.workspace }}/ci-sicherung
+      SICHERUNG_AGE_EMPFAENGER: ${{ runner.temp }}/ci.pub
+      WIEDERHERSTELLUNG_SCHLUESSEL: ${{ runner.temp }}/ci.key
+    steps:
+      - uses: actions/checkout@v4
+      - name: age installieren, Testschlüssel erzeugen
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
+          age-keygen -o "$WIEDERHERSTELLUNG_SCHLUESSEL"
+          age-keygen -y "$WIEDERHERSTELLUNG_SCHLUESSEL" > "$SICHERUNG_AGE_EMPFAENGER"
+      - name: .env.prod für die CI
+        run: |
+          cat > .env.prod <<EOT
+          NODE_ENV=production
+          PORT=4000
+          HOST=0.0.0.0
+          DATABASE_URL=postgres://stammdaten:${DB_PASSWORD}@db:5432/stammdaten
+          ISSUER=http://127.0.0.1:4000
+          PUBLIC_BASE_URL=http://127.0.0.1:4000
+          SCHLUESSEL_KEK=$(openssl rand -hex 32)
+          CORS_ORIGINS=http://localhost
+          ACCESS_TTL_SEK=600
+          REFRESH_TAGE=30
+          GERAET_TOKEN_TAGE=90
+          MAX_FEHLVERSUCHE=5
+          SPERRE_MINUTEN=15
+          WIEDERVERWENDUNG_SEK=20
+          DEMO_CLIENT_SECRET=ci-nur-test
+          DEMO_PASSWORT=Ci-Nur-Test-1
+          RESET_STUNDEN=1
+          EINLADUNG_TAGE=7
+          COOKIE_SECURE=false
+          EOT
+      - name: Images bauen (node:24-slim, postgres:18)
+        run: |
+          grep -q '^FROM node:24-slim' Dockerfile
+          grep -q 'image: postgres:18$' docker-compose.yml
+          docker compose build
+      - name: Datenbank starten, Schema und Seed laden
+        run: |
+          docker compose up -d --wait db
+          # Produktionsweg zuerst (ohne Demodaten), zweimal: muss wiederholbar sein
+          docker compose run --rm --no-deps api node scripts/migrieren.mjs
+          docker compose run --rm --no-deps api node scripts/migrieren.mjs
+          test "$(docker compose exec -T db psql -U stammdaten -d stammdaten -At -c 'select count(*) from benutzer')" = 0
+          docker compose run --rm --no-deps api node scripts/setup.mjs
+      - name: Stack starten
+        run: docker compose up -d --wait api worker
+      - name: api /health und worker prüfen
+        run: |
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4000/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:4000/health
+          test "$(docker compose ps -q worker | xargs docker inspect -f '{{.State.Running}}')" = true
+          docker compose logs worker | grep -q 'gestartet'
+          test "$(docker compose images -q api)" = "$(docker compose images -q worker)"
+      - name: Sicherung
+        run: |
+          mkdir -p "$SICHERUNG_VERZEICHNIS"
+          touch -d '40 days ago' "$SICHERUNG_VERZEICHNIS/stammdaten-20000101T000000Z.dump.age"
+          scripts/sicherung.sh
+          test ! -e "$SICHERUNG_VERZEICHNIS/stammdaten-20000101T000000Z.dump.age"
+          ls -l "$SICHERUNG_VERZEICHNIS"
+          ! ls "$SICHERUNG_VERZEICHNIS" | grep -v '\.dump\.age$'
+      - name: Restore-Probe in frische DB und Zeilenzahlen vergleichen
+        run: |
+          zaehlen="select string_agg(table_name || '=' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'"
+          quelle=$(docker compose exec -T db psql -U stammdaten -d stammdaten -At -c "$zaehlen")
+          scripts/wiederherstellung.sh
+          zeile=$(tail -n 1 "$SICHERUNG_VERZEICHNIS/restore-probe.log")
+          echo "$zeile" | grep -q 'dauer_s=' && echo "$zeile" | grep -q 'alter_s='
+          test "${zeile##* zeilen=}" = "$quelle"
+          echo "$quelle" | grep -q '=[1-9]'
+          test "$(docker compose exec -T db psql -U stammdaten -d postgres -At -c "select count(*) from pg_database where datname = 'restore_probe'")" = 0
+      - name: Restore-Probe meldet zu alte Sicherung und schuetzt die Produktiv-DB
+        run: |
+          neu=$(ls -1 "$SICHERUNG_VERZEICHNIS"/stammdaten-*.dump.age | sort | tail -n 1)
+          alt="$SICHERUNG_VERZEICHNIS/stammdaten-$(date -u -d '2 days ago' +%Y%m%dT%H%M%SZ).dump.age"
+          cp "$neu" "$alt"
+          if scripts/wiederherstellung.sh "$alt"; then echo "zu alte Sicherung nicht erkannt"; exit 1; fi
+          tail -n 1 "$SICHERUNG_VERZEICHNIS/restore-probe.log" | grep -qF 'ergebnis=nicht_bestanden(alter>24h)'
+          rm "$alt"
+          if WIEDERHERSTELLUNG_DB=stammdaten scripts/wiederherstellung.sh; then echo "Produktiv-DB als Ziel nicht abgewiesen"; exit 1; fi
+      - name: Worker endet auf SIGTERM mit 0
+        run: |
+          docker compose stop -t 20 worker
+          test "$(docker inspect -f '{{.State.ExitCode}}' $(docker compose ps -aq worker))" = 0
+      - name: Logs bei Fehler
+        if: failure()
+        run: docker compose logs
+      - name: Aufräumen
+        if: always()
+        run: docker compose down -v
