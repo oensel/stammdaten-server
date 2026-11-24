@@ -32,6 +32,8 @@ export function loadConfig(overrides = {}) {
     smtp: { host: process.env.SMTP_HOST || '', port: Number(process.env.SMTP_PORT || 587), secure: process.env.SMTP_SECURE === 'true', user: process.env.SMTP_USER || '', password: process.env.SMTP_PASSWORD || '', from: process.env.SMTP_FROM || '"Stammdaten" <no-reply@stammdaten.local>' },
     resetStunden: Number(env('RESET_STUNDEN', '1')),
     einladungTage: Number(env('EINLADUNG_TAGE', '7')),
+    // Pflicht für Super-Admins; in production nicht abschaltbar (Story 2.9, NFR-16)
+    zweiFaktorPflicht: prod || env('ZWEI_FAKTOR_PFLICHT', 'false') === 'true',
     cookieSecure: env('COOKIE_SECURE', 'false') !== 'false',
     cookieName: 'sd_refresh',
     // Back-Channel-Logout: Wartezeit vor jedem der 3 Versuche (ms)

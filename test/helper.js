@@ -20,7 +20,7 @@ export async function neueApp(overrides = {}) {
   await admin.query(`create database ${name} template vorlage`);
   await admin.end();
   const pool = new pg.Pool({ connectionString: `${base}/${name}`, max: 5 });
-  const app = await buildApp({ pool, issuer: 'http://stammdaten.test', ...overrides });
+  const app = await buildApp({ pool, issuer: 'http://stammdaten.test', zweiFaktorPflicht: false, ...overrides });
   const api = (method, url, body, token) =>
     app.inject({ method, url, payload: body ?? undefined, headers: token ? { authorization: `Bearer ${token}` } : {} }).then((r) => ({
       status: r.statusCode, body: r.body ? safeJson(r.body) : null, headers: r.headers,

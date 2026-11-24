@@ -4,6 +4,8 @@ import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
 import { baueCtx, systemCtx } from './ctx.js';
+import { entschluessele, verschluessele } from '../keys.js';
+import * as zugang from '../module/zugang/dienst.js';
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CODE = {
@@ -103,3 +105,15 @@ export async function registriereV2(app, definiere) {
     }));
   }, { prefix: '/v2' });
 }
+
+/** Zweiter Faktor (Story 2.9): Brücke vom Altcode (`/auth/login`) in den Dienst des Moduls zugang; die Schlüsselarbeit bleibt hier. */
+export const zweiterFaktor = (pool, cfg) => {
+  const ctx = () => ({ ...systemCtx('auth'), jetzt: cfg.uhr() });
+  const krypto = { verschluesseln: (t) => verschluessele(t, cfg.schluesselKek), entschluesseln: (w) => entschluessele(w, cfg.schluesselKek) };
+  return {
+    benutzer: (id) => zugang.mfaBenutzerLesen(ctx(), pool, { id }),
+    pruefen: (id, eingabe) => zugang.zweitenFaktorPruefen(ctx(), pool, { id, eingabe, ...krypto }),
+    einrichten: (u) => zugang.totpEinrichten(ctx(), pool, { id: u.id, benutzername: u.benutzername, ...krypto }),
+    bestaetigen: (u, eingabe) => zugang.totpBestaetigen(ctx(), pool, { id: u.id, eingabe, ...krypto }),
+  };
+};

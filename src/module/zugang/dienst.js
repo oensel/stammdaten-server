@@ -1,6 +1,6 @@
 import { inTransaktion } from '../../db.js';
 import { conflict, fehler, notFound, tooMany, unauthorized } from '../../errors.js';
-import { hashSecret, neuesToken, pruefeNeuesPasswort, sha256, verifyDummy, verifySecret } from '../../passwords.js';
+import { hashSecret, neueBackupCodes, neuesGeheimnis, neuesToken, otpauthUri, pruefeCode, pruefeNeuesPasswort, sha256, verifyDummy, verifySecret } from '../../passwords.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
 import { beendeDirektrechte, ladeVerbandsrollen, verlangeAuf, wirksameBerechtigungen } from '../rechte/dienst.js';
@@ -142,4 +142,36 @@ export async function ichLesen(ctx, db) {
       verbaende: Object.entries(verbaende).map(([id, rollen]) => ({ id, rollen: rollen.sort() })),
     },
   };
+}
+
+// ---- Zweiter Faktor des Super-Admins (Story 2.9, NFR-16) ----
+export const mfaBenutzerLesen = (ctx, db, { id }) => daten.mfaBenutzer(db, { id, jetzt: ctx.jetzt });
+
+/** Gültiger Code (TOTP, jeder Zeitschritt nur einmal) oder unbenutzter Backup-Code, der dabei verbraucht wird. */
+export async function zweitenFaktorPruefen(ctx, db, { id, eingabe, entschluesseln }) {
+  const roh = eingabe ? await daten.totpGeheimnisLesen(db, id) : null;
+  if (!roh) return false;
+  const schritt = pruefeCode(entschluesseln(roh), eingabe, ctx.jetzt);
+  if (schritt !== null) return daten.totpSchrittVerbrauchen(db, { id, schritt });
+  return daten.backupCodeVerbrauchen(db, { id, hash: sha256(eingabe.trim().toLowerCase()), jetzt: ctx.jetzt });
+}
+
+export async function totpEinrichten(ctx, db, { id, benutzername, verschluesseln }) {
+  const geheimnis = neuesGeheimnis();
+  await daten.totpGeheimnisSetzen(db, { id, wert: verschluesseln(geheimnis) });
+  return { geheimnis, otpauth_uri: otpauthUri(geheimnis, benutzername, 'Stammdaten') };
+}
+
+/** Prüft den Bestätigungscode; bei Erfolg aktiv, mit zehn Backup-Codes (nur hier im Klartext). Sonst null (Aufrufer zählt den Fehlversuch). */
+export async function totpBestaetigen(ctx, db, { id, eingabe, entschluesseln }) {
+  const roh = await daten.totpGeheimnisLesen(db, id);
+  if (!roh) throw conflict('Zuerst die Einrichtung starten', 'einrichtung_nicht_gestartet');
+  const schritt = pruefeCode(entschluesseln(roh), eingabe, ctx.jetzt);
+  if (schritt === null) return null;
+  const codes = neueBackupCodes();
+  await inTransaktion(db, async (c) => {
+    await daten.totpAktivieren(c, { id, schritt, jetzt: ctx.jetzt });
+    await daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) });
+  });
+  return codes;
 }

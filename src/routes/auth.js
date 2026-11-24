@@ -1,10 +1,10 @@
 // Anmeldung: POST /auth/login, /auth/pin, /auth/logout, /oauth/token (refresh_token)
 import { tx } from '../db.js';
-import { badRequest, forbidden, notFound, tooMany, unauthorized } from '../errors.js';
+import { badRequest, conflict, forbidden, notFound, tooMany, unauthorized } from '../errors.js';
 import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, pruefeBearer, rotiere, stelleAus, widerrufeAlle, widerrufeFamilie } from '../auth.js';
 import { PIN_RE, PW_MAX, sha256, verifyDummy, verifySecret } from '../passwords.js';
-import { v2Fehler } from '../pipeline/index.js';
-import { signJwt } from '../jwt.js';
+import { v2Fehler, zweiterFaktor } from '../pipeline/index.js';
+import { signJwt, verifyJwt } from '../jwt.js';
 import { randomUUID } from 'node:crypto';
 
 const geraetSchema = {
@@ -42,7 +42,7 @@ export default async function authRoutes(app) {
   /** Konto per Benutzername oder E-Mail finden. */
   const sucheBenutzer = async (kennung) =>
     (await pool.query(
-      `select id, passwort_hash, pin_hash, ist_super_admin, heimatverein_id, muss_passwort_aendern, fehlversuche, pin_fehlversuche, gesperrt_bis,
+      `select id, benutzername, passwort_hash, pin_hash, ist_super_admin, totp_aktiv_am, totp_secret_verschluesselt, heimatverein_id, muss_passwort_aendern, fehlversuche, pin_fehlversuche, gesperrt_bis,
               gesperrt_bis > now() as gesperrt, ceil(extract(epoch from gesperrt_bis - now()) / 60)::int as min
          from benutzer
         where (lower(benutzername) = lower($1) or lower(email) = lower($1)) and aktiv and geloescht_am is null and anonymisiert_am is null
@@ -93,6 +93,42 @@ export default async function authRoutes(app) {
     });
   }
 
+  /* ---------- Zweiter Faktor des Super-Admins (Story 2.9, NFR-16) ---------- */
+  const MFA_AUD = 'stammdaten-2fa';
+  const einrichtungsToken = (u) => signJwt(
+    { iss: cfg.issuer, aud: MFA_AUD, sub: u.id, exp: Math.floor(Date.now() / 1000) + 600 }, app.keys, 'mfa+jwt');
+
+  const mfa = zweiterFaktor(pool, cfg);
+  const zweitenFaktorPruefen = (u, eingabe) => mfa.pruefen(u.id, eingabe);
+
+  const mfaBenutzer = async (token) => {
+    const p = verifyJwt(token, app.keys, { aud: MFA_AUD, iss: cfg.issuer });
+    const u = p && await mfa.benutzer(p.sub);
+    if (!u?.ist_super_admin) throw unauthorized('Einrichtungs-Token ungültig oder abgelaufen', 'einrichtung_abgelaufen');
+    if (u.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
+    return u;
+  };
+
+  app.post('/auth/2fa/einrichten', {
+    schema: { body: { type: 'object', additionalProperties: false, required: ['einrichtungs_token'], properties: { einrichtungs_token: { type: 'string', maxLength: 2000 } } } },
+  }, async (req, reply) => {
+    const u = await mfaBenutzer(req.body.einrichtungs_token);
+    if (u.totp_aktiv_am) throw conflict('Der zweite Faktor ist schon eingerichtet', 'zweiter_faktor_vorhanden');
+    reply.header('Cache-Control', 'no-store');
+    return mfa.einrichten(u);
+  });
+
+  app.post('/auth/2fa/bestaetigen', {
+    schema: { body: { type: 'object', additionalProperties: false, required: ['einrichtungs_token', 'code'], properties: { einrichtungs_token: { type: 'string', maxLength: 2000 }, code: { type: 'string', maxLength: 10 } } } },
+  }, async (req, reply) => {
+    const u = await mfaBenutzer(req.body.einrichtungs_token);
+    if (u.totp_aktiv_am) throw conflict('Der zweite Faktor ist schon eingerichtet', 'zweiter_faktor_vorhanden');
+    const codes = await mfa.bestaetigen(u, req.body.code);
+    if (!codes) return fehlversuch(u); // zählt wie ein falsches Passwort, sonst ließe sich der Code durchprobieren
+    reply.header('Cache-Control', 'no-store');
+    return { backup_codes: codes };
+  });
+
   /* ---------- Login ---------- */
   app.post('/auth/login', {
     schema: {
@@ -106,6 +142,7 @@ export default async function authRoutes(app) {
           geraet: geraetSchema,
           geraet_token: { type: 'boolean' },
           client_typ: clientTyp,
+          code: { type: 'string', minLength: 1, maxLength: 30 },
         },
       },
     },
@@ -116,6 +153,11 @@ export default async function authRoutes(app) {
     if (!u) { await verifyDummy(passwort); throw unauthorized(FALSCH, 'anmeldung_fehlgeschlagen'); }
     if (u.gesperrt) throw tooMany(`Zu viele Fehlversuche – bitte in ${u.min} Min. erneut versuchen`, { gesperrt_minuten: u.min });
     if (!(await verifySecret(u.passwort_hash, passwort))) return fehlversuch(u);
+    if (cfg.zweiFaktorPflicht && u.ist_super_admin) {
+      // Ohne eingerichteten zweiten Faktor gibt es keine Sitzung, nur den Weg zur Einrichtung
+      if (!u.totp_aktiv_am) return { zweiter_faktor: 'einrichten', einrichtungs_token: einrichtungsToken(u) };
+      if (!await zweitenFaktorPruefen(u, req.body.code)) return fehlversuch(u);
+    }
     const web = req.body.client_typ === 'web';
     return ausliefern(reply, await melde({ benutzer: u, vereinId, anwendung, geraet, geraetToken, web }), web);
   });
