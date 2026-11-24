@@ -39,7 +39,7 @@ async function ladeCtx(app, req) {
     // frisch geprüft: Rolle und Zugehörigkeit zu einem Verein (FR-14)
     if (!verbandsrollen.length || !await ladeVerbandskontext(app.pool, benutzer, claims.kontext.id)) throw notFound();
     const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
-    const quellen = await ladeQuellen(null, app.pool, { kontext, verbandsrollen });
+    const quellen = await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, jetzt, verbandsrollen });
     return baueCtx({ ...basis, kontext, rechte: {
       app_scopes, quellen, verbandsrollen, stellvertreter: verbandsrollen.some((r) => r.stellvertreter_von), super_admin: benutzer.ist_super_admin,
       scopes: benutzer.ist_super_admin ? wirksameScopes({ superAdmin: true }, anwendung.scopes) : [],
@@ -61,7 +61,7 @@ async function ladeCtx(app, req) {
     ...basis, kontext,
     rechte: {
       app_scopes,
-      quellen: await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, rolle: k.rolle, rechte: k.rechte }),
+      quellen: await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, jetzt, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
     },

@@ -511,6 +511,10 @@ create table benutzer_berechtigungen (
 -- vergeben_durch_super_admin ist nicht über die API setzbar: ein Trigger leitet es aus benutzer(vergeben_von).ist_super_admin ab
 ```
 
+> Umsetzung (Story 2.8): eigene Tabelle `delegationen` (Migration 022) statt `benutzer_berechtigungen`. Statt `delegiert_aus_id` steht
+> `delegiert_aus_quelle` + `delegiert_aus_schluessel` (Rollenschlüssel); die Quelle ohne Herkunft ist die Direktvergabe des Super-Admins.
+> Delegierte Rechte wirken als Quelle `direkt` im Kontext ihres Bereichs.
+
 **Delegationsregeln**
 
 1. Wer `recht:DELEGIEREN` in einem Bereich hat, darf anderen Operationen dieses Rechts **in diesem Bereich oder darunter** geben.

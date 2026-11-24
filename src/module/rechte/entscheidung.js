@@ -4,7 +4,7 @@
 // Ein Ziel ist { global } oder { vereine: [id], verbaende: [id], vorfahren: { id: [verband_id] }, heimatverein_id, judopassdaten, eigen,
 //   person: { aktiv, rang, lizenzen }, werte: [{ art, stufe }] }.
 import { BASISRECHTE, kennt } from './katalog.js';
-import { subjektErfuellt, wertErfuellt } from './filter.js';
+import { PERSON_FELDER, subjektErfuellt, wertErfuellt } from './filter.js';
 import { scopeFuer } from './obergrenze.js';
 
 // Nur der Landesverband des Heimatvereins (E79), auch nicht der Super-Admin (Nutzerentscheid 2026-11-24)
@@ -38,6 +38,10 @@ function erlaubtQuelle(ctx, q, recht, ziel) {
   if (NUR_HEIMAT.includes(recht)) return !!ziel.heimatverein_id && deckt(q.bereich, ziel.heimatverein_id, ziel);
   return [...(ziel.vereine ?? []), ...(ziel.verbaende ?? [])].some((id) => deckt(q.bereich, id, ziel));
 }
+
+/** Quellen, die `recht` im Bereich des Ziels geben (ohne Filterprüfung): Grundlage der Delegation. */
+export const quellenImBereich = (ctx, recht, ziel) => ctx.rechte.quellen
+  .filter((q) => q.rechte.includes(recht) && [...(ziel.vereine ?? []), ...(ziel.verbaende ?? [])].some((id) => deckt(q.bereich, id, ziel)));
 
 // App-Obergrenze: gilt für alle, auch Super-Admins, in jedem Kontext
 const scopeFehlt = (ctx, recht) => !ctx.rechte.app_scopes.includes(scopeFuer(recht));
@@ -74,12 +78,7 @@ export function listenbereich(ctx, recht, { judopassdaten = false } = {}) {
 }
 
 // Feldgruppen je Datenart; was hier fehlt, wird nie ausgegeben (Positivliste)
-const FELDER = {
-  person: {
-    stamm: ['id', 'vorname', 'nachname', 'geburtsdatum', 'geschlecht', 'nationalitaet', 'change_seq'],
-    kontakt: ['strasse', 'plz', 'ort', 'email', 'telefon'],
-  },
-};
+const FELDER = { person: PERSON_FELDER };
 const LESERECHT = { person: 'mitglieder:LESEN' };
 
 /** Felder, die eine Quelle für ein Recht freigibt. Verbandsrollen sehen nie Kontaktdaten (E10). */
