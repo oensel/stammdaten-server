@@ -183,6 +183,7 @@ describe('Logout und Back-Channel', () => {
 
 describe('GET /v1/anwendungen', () => {
   it('öffentlich: nur aktive Apps mit Startadresse (schluessel, name, url, icon)', async () => {
+    await t.pool.query(`update anwendungen set url = null where schluessel not in ('kyu-manager-pro', 'dojo-master-pro')`); // Migration 007 setzt Entwicklungsadressen
     await t.pool.query(`update anwendungen set url = 'https://kyu.example.org', icon = 'kyu' where schluessel = 'kyu-manager-pro'`);
     await t.pool.query(`update anwendungen set url = 'https://dojo.example.org' where schluessel = 'dojo-master-pro'`);
     const r = await t.api('GET', '/v1/anwendungen');

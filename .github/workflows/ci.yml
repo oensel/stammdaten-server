@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  schutz:
+    name: Keine Geheimnisse oder Produktivdaten
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verbotene Dateien prüfen
+        run: |
+          verboten=$(git ls-files | grep -Ei '(^|/)\.env($|\.)|(^|/)\.pgdata|\.dump$|hajime-abzug|(^|/)abzug/' | grep -v '^\.env\.example$' || true)
+          if [ -n "$verboten" ]; then echo "Verbotene Dateien im Repo:"; echo "$verboten"; exit 1; fi
+
+  test:
+    name: Tests (Windows, Node 24)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Konfiguration aus Beispiel
+        run: Copy-Item .env.example .env
+      - run: npm test
