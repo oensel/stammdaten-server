@@ -24,5 +24,8 @@ export const vereinAendern = (db, v) => eine(db,
     where id = $1 returning ${VEREIN}`,
   [v.id, v.name, v.kurzname, v.vereinsnummer, v.ort, v.verband_id, v.aufgeloest_am, v.geaendert_von]);
 
+export const landesverbandVon = (db, id) => eine(db,
+  `select v.id, v.name from verband_pfade p join verbaende v on v.id = p.vorfahr_id where p.nachfahr_id = $1 and v.typ = 'landesverband'`, [id]);
+
 export const pfadVorhanden = async (db, vorfahrId, nachfahrId) =>
   !!(await eine(db, 'select 1 from verband_pfade where vorfahr_id = $1 and nachfahr_id = $2', [vorfahrId, nachfahrId]));
