@@ -18,6 +18,7 @@ it('23: der QR-Code eines aufgelösten Vereins gilt nicht mehr', async () => {
   const c = await neuerCode();
   await q(`update vereine set aufgeloest_am = '2020-01-01' where id = $1`, [verein]);
   expect((await registriere(c, 'spaet')).status).toBe(404);
+  expect((await t.api('POST', `/v2/vereine/${verein}/qr-codes`, {}, admin)).body).toMatchObject({ status: 409, code: 'verein_aufgeloest' });
   expect(await q(`select 1 from benutzer where benutzername = 'spaet'`)).toEqual([]);
 });
 
@@ -27,6 +28,13 @@ it('24: UUIDs in Großbuchstaben bezeichnen dieselbe ID', async () => {
   const r = await t.api('GET', `/v2/vereine/${frisch.toUpperCase()}`, null, admin);
   expect(r.status).toBe(200);
   expect(r.body.id).toBe(frisch);
+});
+
+it('24: ein Passwort in UUID-Form bleibt unverändert', async () => {
+  const passwort = 'ABCDEFAB-1234-1234-1234-ABCDEFABCDEF';
+  expect((await registriere(await neuerCode(), 'uuidpw', { passwort })).status).toBe(201);
+  await q(`update benutzer_vereine set status = 'freigegeben' where benutzer_id = (select id from benutzer where benutzername = 'uuidpw')`);
+  expect((await t.login('uuidpw', {}, passwort)).status).toBe(200);
 });
 
 it('25: NUL-Zeichen sind eine fehlerhafte Eingabe (400), kein Serverfehler', async () => {

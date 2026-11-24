@@ -97,7 +97,7 @@ export async function registriereV2(app, definiere) {
     // Review 24: IDs sind kleingeschrieben, Großbuchstaben in einer UUID sind dieselbe ID (sonst 404 bzw. Vergleich verfehlt)
     scope.addHook('preValidation', async (req) => {
       for (const teil of [req.params, req.query, req.body]) {
-        if (teil && typeof teil === 'object') for (const [k, v] of Object.entries(teil)) if (typeof v === 'string' && UUID.test(v)) teil[k] = v.toLowerCase();
+        if (teil && typeof teil === 'object') for (const [k, v] of Object.entries(teil)) if (typeof v === 'string' && /(^|_)id$/.test(k) && UUID.test(v)) teil[k] = v.toLowerCase();
       }
     });
     definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, handler }) => scope.route({

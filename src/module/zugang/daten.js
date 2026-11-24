@@ -85,8 +85,10 @@ export const totpGeheimnisSetzen = (db, { id, wert }) => db.query(
 export const totpSchrittVerbrauchen = async (db, { id, schritt }) => (await db.query(
   'update benutzer set totp_letzter_schritt = $2 where id = $1 and (totp_letzter_schritt is null or totp_letzter_schritt < $2)', [id, schritt])).rowCount === 1;
 
-export const totpAktivieren = (db, { id, schritt, jetzt }) => db.query(
-  'update benutzer set totp_aktiv_am = $3, totp_letzter_schritt = $2 where id = $1', [id, schritt, jetzt]);
+/** Nur die erste Bestätigung gewinnt, und nur für das Geheimnis, gegen das der Code geprüft wurde. */
+export const totpAktivieren = async (db, { id, schritt, wert, jetzt }) => (await db.query(
+  `update benutzer set totp_aktiv_am = $3, totp_letzter_schritt = $2
+    where id = $1 and totp_aktiv_am is null and totp_secret_verschluesselt = $4`, [id, schritt, jetzt, wert])).rowCount === 1;
 
 export const backupCodesErsetzen = async (db, { id, hashes }) => {
   await db.query('delete from totp_backup_codes where benutzer_id = $1', [id]);

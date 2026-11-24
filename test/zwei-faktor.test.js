@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { code, schrittFuer } from '../src/passwords.js';
-import { neueApp } from './helper.js';
+import { code, hashSecret, schrittFuer } from '../src/passwords.js';
+import { CLIENT, neueApp } from './helper.js';
 
 let t;
 let jetzt = new Date('2026-11-24T10:00:00Z');
@@ -72,6 +72,20 @@ describe('Zweiter Faktor für den Super-Admin (Story 2.9)', () => {
     for (let i = 0; i < 2; i++) await t.login('eltern1', { code: '000000' });
     expect((await t.login('eltern1', { code: '000000' })).status).toBe(429);
     expect((await t.login('eltern1', { code: backup[2] })).status).toBe(429);
+  });
+
+  it('die PIN-Anmeldung umgeht den zweiten Faktor nicht', async () => {
+    const pin = '4711';
+    const ids = {};
+    for (const name of ['eltern1', 'schueler1']) {
+      await t.pool.query('update benutzer set pin_hash = $2, fehlversuche = 0, gesperrt_bis = null where benutzername = $1', [name, await hashSecret(pin)]);
+      ids[name] = (await t.pool.query(`insert into geraete (verein_id, anwendung_id, benutzer_id, name, typ)
+        select bv.verein_id, a.id, b.id, 'Tablet', 'tablet' from benutzer b join benutzer_vereine bv on bv.benutzer_id = b.id, anwendungen a
+         where b.benutzername = $1 and a.schluessel = $2 limit 1 returning id`, [name, CLIENT])).rows[0].id;
+    }
+    const pinLogin = (benutzername) => t.api('POST', '/auth/pin', { benutzername, pin, geraet_id: ids[benutzername], client_id: CLIENT });
+    expect((await pinLogin('schueler1')).status).toBe(200);
+    expect((await pinLogin('eltern1')).body).toMatchObject({ status: 401, code: 'pin_fehlgeschlagen' });
   });
 
   it('normale Benutzer brauchen keinen zweiten Faktor', async () => {

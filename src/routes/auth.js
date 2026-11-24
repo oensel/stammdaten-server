@@ -197,7 +197,9 @@ export default async function authRoutes(app) {
     const g = u && (await pool.query(
       `select id, verein_id, gesperrt from geraete where id = $1 and anwendung_id = $2 and (benutzer_id = $3 or benutzer_id is null)`,
       [geraetId, anwendung.id, u.id])).rows[0];
-    if (!u || !g || !u.pin_hash || g.gesperrt) { await verifyDummy(pin); throw unauthorized('PIN falsch oder nicht eingerichtet', 'pin_fehlgeschlagen'); }
+    // Die PIN ist kein zweiter Faktor: Super-Admins melden sich bei Pflicht nur mit Passwort und Code an
+    const pinGesperrt = u?.ist_super_admin && cfg.zweiFaktorPflicht;
+    if (!u || !g || !u.pin_hash || g.gesperrt || pinGesperrt) { await verifyDummy(pin); throw unauthorized('PIN falsch oder nicht eingerichtet', 'pin_fehlgeschlagen'); }
     if (u.gesperrt) throw tooMany(`Zu viele Fehlversuche – bitte in ${u.min} Min. erneut versuchen`, { gesperrt_minuten: u.min });
     if (!PIN_RE.test(pin) || !(await verifySecret(u.pin_hash, pin))) {
       // PIN nach maxFehlversuchen entwerten → nur noch Passwort-Anmeldung
