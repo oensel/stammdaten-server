@@ -37,7 +37,13 @@ export async function seedDemo(pool, passwort) {
   const c = await pool.connect();
   try {
     await c.query('begin');
-    const verein = (await c.query(`insert into vereine (name, kurzname, ort, ist_mandant) values ('JC Demo', 'JCD', 'Musterstadt', true) returning id`)).rows[0].id;
+    let verband = null;
+    for (const [typ, name] of [['dachverband', 'Demo-Dachverband'], ['landesverband', 'Demo-Landesverband'], ['bezirk', 'Demo-Bezirk'], ['kreis', 'Demo-Kreis']]) {
+      const da = (await c.query(`select id from verbaende where typ = $1 and (name = $2 or typ = 'dachverband') and geloescht_am is null`, [typ, name])).rows[0];
+      verband = da?.id ?? (await c.query('insert into verbaende (name, typ, uebergeordnet_id) values ($1,$2,$3) returning id', [name, typ, verband])).rows[0].id;
+    }
+    const verein = (await c.query(
+      `insert into vereine (name, kurzname, ort, ist_mandant, verband_id) values ('JC Demo', 'JCD', 'Musterstadt', true, $1) returning id`, [verband])).rows[0].id;
     const mitglieder = {};
     for (const [nr, vn, nn, gd] of [[1, 'Lena', 'Schmidt', '2014-05-02'], [2, 'Tim', 'Schmidt', '2016-09-14'], [3, 'Thomas', 'Trainer', '1985-03-01'],
       [4, 'Petra', 'Prüfer', '1980-07-21'], [5, 'Anton', 'Admin', '1975-01-30']]) {

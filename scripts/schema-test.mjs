@@ -78,8 +78,12 @@ try {
     [], /check/i));
 
   // Testdaten: zwei Vereine
-  const { rows: [v1] } = await db.query(`insert into vereine (name, ist_mandant) values ('JC Test', true) returning id`);
-  await db.query(`insert into vereine (name, ist_mandant) values ('JC Anders', true)`);
+  let kreis = null;
+  for (const typ of ['dachverband', 'landesverband', 'bezirk', 'kreis']) {
+    kreis = (await db.query('insert into verbaende (name, typ, uebergeordnet_id) values ($1, $1, $2) returning id', [typ, kreis])).rows[0].id;
+  }
+  const { rows: [v1] } = await db.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Test', true, $1) returning id`, [kreis]);
+  await db.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Anders', true, $1)`, [kreis]);
   const { rows: [m1] } = await db.query(
     `insert into mitglieder (verein_id, mitgliedsnr, vorname, nachname) values ($1, 1, 'Lena', 'Schmidt')
      returning id, change_seq, change_xid::text`, [v1.id]);

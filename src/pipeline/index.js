@@ -1,7 +1,8 @@
 // Anfrage-Pipeline für /v2 (AD-2, AD-9): Token → Kontext → ctx → genau ein Dienst; Fehler als Problem-JSON.
 import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, pruefeBearer } from '../auth.js';
-import { badRequest, errorHandler, notFound } from '../errors.js';
+import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
+import { ladeVerbandsrollen } from '../module/rechte/dienst.js';
 import { baueCtx } from './ctx.js';
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -26,11 +27,14 @@ async function ladeCtx(app, req) {
   if (claims.geraet_id && gewaehlt && gewaehlt !== claims.verein_id) throw notFound();
   const anwendung = await ladeAnwendung(app.pool, claims.azp);
   const benutzer = await ladeBenutzerFuerKontext(app.pool, claims.sub);
+  // Geräte-Tokens (PIN am Tablet) tragen keine Verbands- und Super-Admin-Rechte
+  if (claims.geraet_id) benutzer.ist_super_admin = false;
+  const verbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
   const basis = { benutzer: Object.freeze({ id: benutzer.id }), anwendung: anwendung.schluessel, jetzt };
   const vereinId = gewaehlt || claims.verein_id;
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
-    return baueCtx({ ...basis, rechte: { super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
+    return baueCtx({ ...basis, rechte: { verbandsrollen, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
   }
   let k;
   try {
@@ -42,15 +46,25 @@ async function ladeCtx(app, req) {
   return baueCtx({
     ...basis, kontext: Object.freeze({ art: 'verein', id: k.verein_id }),
     rechte: {
-      rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
+      verbandsrollen, rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
     },
   });
 }
 
+const IF_MATCH = /^"(\d{1,19})"$/;
+function leseIfMatch(req) {
+  const wert = req.headers['if-match'];
+  if (wert === undefined) throw fehler(428, 'If-Match fehlt', 'if_match_fehlt');
+  const m = IF_MATCH.exec(wert);
+  if (!m) throw badRequest('If-Match ist ungültig');
+  return m[1];
+}
+
 /**
- * Registriert /v2-Routen: `registriereV2(app, (v2) => v2({ method, url, schema, status, handler }))`.
- * `handler(ctx, db, { params, query, body })` ruft genau einen Dienst auf; `db` ist der Pool.
+ * Registriert /v2-Routen: `registriereV2(app, (v2) => v2({ method, url, schema, status, ifMatch, handler }))`.
+ * `handler(ctx, db, { params, query, body, version })` ruft genau einen Dienst auf; `db` ist der Pool.
+ * Mit `ifMatch` ist der Header Pflicht (428), `version` ist dann die change_seq daraus. Ein Ergebnis mit change_seq bekommt ein ETag.
  */
 export async function registriereV2(app, definiere) {
   await app.register(async (scope) => {
@@ -59,10 +73,11 @@ export async function registriereV2(app, definiere) {
     scope.decorateRequest('ctx', null);
     // Anmeldung vor Körper und Schema: Unangemeldete erfahren nichts über die Route
     scope.addHook('onRequest', async (req) => { if (!req.is404) req.ctx = await ladeCtx(app, req); });
-    definiere(({ method, url, schema, status = 200, handler }) => scope.route({
+    definiere(({ method, url, schema, status = 200, ifMatch = false, handler }) => scope.route({
       method, url, schema,
       handler: async (req, reply) => {
-        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body });
+        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
+        if (ergebnis?.change_seq) reply.header('ETag', `"${ergebnis.change_seq}"`);
         reply.status(status);
         return ergebnis;
       },

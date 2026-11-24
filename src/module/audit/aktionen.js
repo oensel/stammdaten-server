@@ -1,5 +1,6 @@
 // Zentrale Liste der auditpflichtigen Aktionen: genau NFR-18. Jede Aktion braucht in ihrer Story einen Audit-Test (AD-6).
 export const AKTIONEN = Object.freeze([
+  'verband_angelegt', 'verband_geaendert', 'verein_angelegt', 'verein_geaendert',
   'recht_vergeben', 'recht_entzogen',
   'person_zusammengefuehrt',
   'geloescht',

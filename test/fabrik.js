@@ -1,0 +1,25 @@
+// Test-Fabrik für den Verbandsbaum. verband_pfade pflegen die Trigger.
+import { randomBytes } from 'node:crypto';
+
+const kuerzel = () => randomBytes(4).toString('hex');
+const eine = async (db, sql, p) => (await db.query(sql, p)).rows[0].id;
+
+export const verband = (db, typ, uebergeordnet_id, name = `${typ} ${kuerzel()}`) =>
+  eine(db, 'insert into verbaende (name, typ, uebergeordnet_id) values ($1,$2,$3) returning id', [name, typ, uebergeordnet_id]);
+
+export const verein = (db, kreisId, name = `Verein ${kuerzel()}`) =>
+  eine(db, 'insert into vereine (name, ist_mandant, verband_id) values ($1, true, $2) returning id', [name, kreisId]);
+
+/** Legt LV → Bezirk → Kreis → Verein unter dem (einzigen) DJB an; den DJB nur, wenn er fehlt. Liefert die IDs. */
+export async function verbandsbaum(db) {
+  const da = (await db.query(`select id from verbaende where typ = 'dachverband'`)).rows[0]?.id;
+  const djb = da ?? await verband(db, 'dachverband', null, 'DJB');
+  const lv = await verband(db, 'landesverband', djb);
+  const bezirk = await verband(db, 'bezirk', lv);
+  const kreis = await verband(db, 'kreis', bezirk);
+  return { djb, lv, bezirk, kreis, verein: await verein(db, kreis) };
+}
+
+/** Gibt einem Demo-Zugang eine Verbandsrolle. */
+export const gibRolle = (db, benutzername, rolle, verbandId) => db.query(
+  'insert into benutzer_verbandsrollen (benutzer_id, verband_id, rolle) select id, $2, $3 from benutzer where benutzername = $1', [benutzername, verbandId, rolle]);

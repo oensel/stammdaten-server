@@ -15,7 +15,7 @@ export const notFound = (d = 'Nicht gefunden') => fehler(404, d, 'nicht_gefunden
 export const conflict = (d, c = 'konflikt', extra) => fehler(409, d, c, extra);
 export const tooMany = (d, extra) => fehler(429, d, 'zu_viele_versuche', extra);
 
-const TITEL = { 400: 'Ungültige Anfrage', 401: 'Nicht angemeldet', 403: 'Verboten', 404: 'Nicht gefunden', 409: 'Konflikt', 428: 'Vorbedingung fehlt', 429: 'Zu viele Versuche' };
+const TITEL = { 400: 'Ungültige Anfrage', 401: 'Nicht angemeldet', 403: 'Verboten', 404: 'Nicht gefunden', 409: 'Konflikt', 412: 'Vorbedingung nicht erfüllt', 422: 'Nicht verarbeitbar', 428: 'Vorbedingung fehlt', 429: 'Zu viele Versuche' };
 
 export function errorHandler(err, req, reply) {
   let status = err.status || err.statusCode || 500;

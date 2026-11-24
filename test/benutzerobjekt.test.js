@@ -9,7 +9,7 @@ describe('Benutzer-Objekt mit allen Vereinen und Berechtigungen', () => {
   it('Admin+Trainer in A, Prüfer in B: Login-Antwort und /ich listen beide Vereine mit Rolle, Rechten, Scopes', async () => {
     const a = (await t.pool.query(`select verein_id from benutzer_vereine bv join benutzer b on b.id = bv.benutzer_id where b.benutzername = 'admin1'`)).rows[0].verein_id;
     const uid = (await t.pool.query(`select id from benutzer where benutzername = 'admin1'`)).rows[0].id;
-    const b = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('JC Zweit', true) returning id`)).rows[0].id;
+    const b = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Zweit', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [uid, b]);
     await t.pool.query(`insert into benutzer_rechte (benutzer_id, verein_id, recht_id) select $1,$2,id from rechte where schluessel = 'pruefer'`, [uid, b]);
 
@@ -40,7 +40,7 @@ describe('Heimatverein und Vereinswechsel', () => {
     const a = (await t.login('admin1', { verein_id: vs[0] })).body;
     const b = vs[1];
     // fremden Verein als Heimatverein lehnt der Server ab
-    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremd', true) returning id`)).rows[0].id;
+    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremd', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     expect((await t.api('PATCH', '/ich', { heimatverein_id: fremd }, a.access_token)).status).toBe(403);
     expect((await t.api('PATCH', '/ich', { heimatverein_id: b }, a.access_token)).status).toBe(200);
     const l = await t.login('admin1');

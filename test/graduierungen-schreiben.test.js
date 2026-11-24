@@ -91,7 +91,7 @@ describe('Graduierungen zurückschreiben', () => {
     expect(b.body.code).toBe('nur_anwendung');
     expect((await loesche('00000000-0000-4000-8000-000000000000', benutzer)).body.code).toBe('nur_anwendung');
 
-    const fremdVerein = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremd', true) returning id`)).rows[0].id;
+    const fremdVerein = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremd', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const f = await post({ verein_id: fremdVerein });
     expect(f.status).toBe(403);
     expect(f.body.code).toBe('verein_nicht_freigegeben');
