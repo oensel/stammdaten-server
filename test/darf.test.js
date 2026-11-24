@@ -125,8 +125,6 @@ describe('über die API', () => {
     t = await neueApp();
     a = await verbandsbaum(t.pool); b = await verbandsbaum(t.pool);
     await verein(t.pool, a.kreis);
-    // Vergabe folgt mit 2.6; hier direkt, damit eine Rolle mit vereine:LESEN im Verband wirkt
-    await q('alter table benutzer_verbandsrollen drop constraint benutzer_verbandsrollen_rolle_check');
     await gibRolle(t.pool, 'trainer1', 'landesvertreter', a.lv);
   });
   afterAll(() => t.schliessen());

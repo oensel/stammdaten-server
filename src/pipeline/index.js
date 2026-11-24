@@ -41,7 +41,7 @@ async function ladeCtx(app, req) {
     const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
     const quellen = await ladeQuellen(null, app.pool, { kontext, verbandsrollen });
     return baueCtx({ ...basis, kontext, rechte: {
-      app_scopes, quellen, verbandsrollen, super_admin: benutzer.ist_super_admin,
+      app_scopes, quellen, verbandsrollen, stellvertreter: verbandsrollen.some((r) => r.stellvertreter_von), super_admin: benutzer.ist_super_admin,
       scopes: benutzer.ist_super_admin ? wirksameScopes({ superAdmin: true }, anwendung.scopes) : [],
     } });
   }
