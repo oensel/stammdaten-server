@@ -129,6 +129,15 @@ describe('Seed', () => {
     expect(await filterVon('landesvertreter', vb(baum.lv))).toEqual({ 'mitglieder:LESEN': 'alle_ohne_kontakt', 'mitglieder:AENDERN': 'judopassfelder' });
     expect(await filterVon('dan_pruefungsorganisation', vb(baum.lv))).toEqual(pruefung('pruefung_dan'));
   });
+  it('Bezirks-Dan-Beauftragte sehen nur aktive Mitglieder ab 1. Kyu', async () => {
+    const kontext = { art: 'verband', id: baum.bezirk };
+    const quellen = await ladeQuellen(null, t.pool, { kontext, verbandsrollen: [{ rolle: 'bezirks_dan_beauftragter', verband_id: baum.bezirk }] });
+    const ctx = baueCtx({ benutzer: { id: 'u' }, kontext, anwendung: 'a', jetzt: new Date(), rechte: { quellen, app_scopes: ['mitglieder:lesen', 'graduierungen:lesen'] } });
+    const auf = (aktiv, rang) => ({ vereine: [baum.verein], vorfahren: { [baum.verein]: [baum.kreis, baum.bezirk] }, person: { aktiv, rang, lizenzen: [] } });
+    for (const recht of ['mitglieder:LESEN', 'graduierung:LESEN']) {
+      expect([auf(true, 9), auf(true, 8), auf(false, 9), auf(false, 12)].map((z) => darf(ctx, recht, z))).toEqual([true, false, false, false]);
+    }
+  });
   it('ungültige Filter nimmt die Datenbank nicht an', async () => {
     await expect(t.pool.query(`insert into datenfilter (schluessel, name, subjekt_min_rang, subjekt_max_rang) values ('x', 'x', 9, 2)`)).rejects.toThrow('check');
   });
