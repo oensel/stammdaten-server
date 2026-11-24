@@ -67,3 +67,28 @@ export const fehlversuch = (db, { id, max, sperreBis }) => db.query(
   `update benutzer set gesperrt_bis = case when fehlversuche + 1 >= $2 then $3::timestamptz else gesperrt_bis end,
           fehlversuche = case when fehlversuche + 1 >= $2 then 0 else fehlversuche + 1 end where id = $1`, [id, max, sperreBis]);
 export const fehlversucheZuruecksetzen = (db, id) => db.query('update benutzer set fehlversuche = 0 where id = $1', [id]);
+
+// ---- Zweiter Faktor (Story 2.9) ----
+export const mfaBenutzer = (db, { id, jetzt }) => eine(db,
+  `select id, benutzername, ist_super_admin, totp_aktiv_am, gesperrt_bis > $2 as gesperrt
+     from benutzer where id = $1 and aktiv and geloescht_am is null`, [id, jetzt]);
+
+export const totpGeheimnisLesen = async (db, id) => (await eine(db, 'select totp_secret_verschluesselt as wert from benutzer where id = $1', [id]))?.wert ?? null;
+
+export const totpGeheimnisSetzen = (db, { id, wert }) => db.query(
+  'update benutzer set totp_secret_verschluesselt = $2, totp_letzter_schritt = null where id = $1 and totp_aktiv_am is null', [id, wert]);
+
+/** Ein UPDATE: bei parallelen Anfragen gewinnt genau eine; ein schon benutzter Schritt zählt nicht. */
+export const totpSchrittVerbrauchen = async (db, { id, schritt }) => (await db.query(
+  'update benutzer set totp_letzter_schritt = $2 where id = $1 and (totp_letzter_schritt is null or totp_letzter_schritt < $2)', [id, schritt])).rowCount === 1;
+
+export const totpAktivieren = (db, { id, schritt, jetzt }) => db.query(
+  'update benutzer set totp_aktiv_am = $3, totp_letzter_schritt = $2 where id = $1', [id, schritt, jetzt]);
+
+export const backupCodesErsetzen = async (db, { id, hashes }) => {
+  await db.query('delete from totp_backup_codes where benutzer_id = $1', [id]);
+  for (const h of hashes) await db.query('insert into totp_backup_codes (benutzer_id, code_hash) values ($1, $2)', [id, h]);
+};
+
+export const backupCodeVerbrauchen = async (db, { id, hash, jetzt }) => (await db.query(
+  'update totp_backup_codes set benutzt_am = $3 where benutzer_id = $1 and code_hash = $2 and benutzt_am is null', [id, hash, jetzt])).rowCount === 1;
