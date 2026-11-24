@@ -9,6 +9,7 @@ import * as daten from './daten.js';
 const VERSTOSS = {
   verein_braucht_kreis: [422, 'Ein Verein braucht einen Kreis', 'verein_braucht_kreis'],
   ebenenfolge_verletzt: [422, 'Die Ebenenfolge DJB › Landesverband › Bezirk › Kreis › Verein ist nicht eingehalten', 'ebenenfolge_verletzt'],
+  frist_ebene_unzulaessig: [422, 'Nur der DJB und Landesverbände setzen Fristen', 'frist_ebene_unzulaessig'],
   verbaende_ein_dachverband_uq: [409, 'Es gibt schon einen Dachverband', 'dachverband_vorhanden'],
   verbaende_name_uq: [409, 'Der Name ist schon vergeben', 'name_vergeben'],
   vereine_name_uq: [409, 'Der Name ist schon vergeben', 'name_vergeben'],
@@ -91,3 +92,32 @@ export function vereinAendern(ctx, db, { id, version, aenderung }) {
 
 /** Liegt ein Verband oder Verein unter (oder gleich) einem Verband? */
 export const liegtUnter = (_ctx, db, { nachfahr_id, vorfahr_id }) => daten.pfadVorhanden(db, vorfahr_id, nachfahr_id);
+
+/** Einzige Fristauflösung (AD-11). `verband_id` darf auch ein Verein sein. Liefert { art, wert, einheit, quelle_verband_id }. */
+export async function fristFuer(_ctx, db, { art, verband_id }) {
+  const [frist] = await daten.fristenAufloesen(db, { art, verbandId: verband_id });
+  if (!frist) throw new Error(`Unbekannte Fristart: ${art}`);
+  return frist;
+}
+
+export async function fristenLesen(ctx, db, { verband_id }) {
+  verlange(ctx, 'fristen:LESEN');
+  if (!await daten.verbandLesen(db, verband_id)) throw notFound();
+  return { fristen: await daten.fristenAufloesen(db, { art: null, verbandId: verband_id }) };
+}
+
+/** DJB setzt den Standard, ein Landesverband überschreibt für sein Gebiet. */
+export function fristSetzen(ctx, db, { verband_id, art, wert }) {
+  verlange(ctx, 'fristen:AENDERN', { verband_id });
+  return schreibe(db, async (c) => {
+    const ziel = await daten.verbandLesen(c, verband_id);
+    if (!ziel) throw notFound();
+    const standard = await daten.fristArtSperren(c, art);
+    if (!standard) throw notFound();
+    const verbandId = ziel.typ === 'dachverband' ? null : verband_id;
+    const alt = await daten.fristLesen(c, art, verbandId);
+    const { id, ...neu } = await daten.fristSetzen(c, { art, verbandId, wert, einheit: standard.einheit });
+    await audit.schreiben(ctx, c, { aktion: 'frist_geaendert', objekt_art: 'frist', objekt_id: id, alt: alt && { art, verband_id, ...alt }, neu: { art, verband_id, ...neu } });
+    return { art, ...neu, quelle_verband_id: verbandId };
+  });
+}

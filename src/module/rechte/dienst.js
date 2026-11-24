@@ -12,6 +12,10 @@ const istDjbAdmin = (ctx) => ctx.rechte.super_admin || ctx.rechte.verbandsrollen
 const REGELN = {
   'verbandsbaum:LESEN': (ctx) => ctx.benutzer !== null,
   'verbandsbaum:AENDERN': istDjbAdmin,
+  'fristen:LESEN': (ctx) => ctx.benutzer !== null,
+  // ziel = { verband_id }: DJB-Admins überall, LV-Admins im eigenen Landesverband
+  'fristen:AENDERN': (ctx, { verband_id }) =>
+    istDjbAdmin(ctx) || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'lv_admin' && r.verband_id === verband_id),
 };
 
 /** Einzige Rechteentscheidung (AD-3). Ein unbekanntes Recht ist ein Programmierfehler. Ausbau in Epic 2. */

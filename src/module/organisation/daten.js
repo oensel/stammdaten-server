@@ -29,3 +29,19 @@ export const landesverbandVon = (db, id) => eine(db,
 
 export const pfadVorhanden = async (db, vorfahrId, nachfahrId) =>
   !!(await eine(db, 'select 1 from verband_pfade where vorfahr_id = $1 and nachfahr_id = $2', [vorfahrId, nachfahrId]));
+
+export const verbandLesen = (db, id) => eine(db, `select ${VERBAND} from verbaende where id = $1 and geloescht_am is null`, [id]);
+
+/** Wirksame Fristen eines Verbands oder Vereins: unterste Ebene im Pfad gewinnt, sonst der DJB-Standard. `art` null = alle. */
+export const fristenAufloesen = async (db, { art, verbandId }) => (await db.query(
+  `select distinct on (f.art) f.art, f.wert, f.einheit, f.verband_id as quelle_verband_id
+     from fristen f left join verband_pfade p on p.vorfahr_id = f.verband_id and p.nachfahr_id = $2
+    where ($1::text is null or f.art = $1) and (f.verband_id is null or p.nachfahr_id is not null)
+    order by f.art, p.tiefe asc nulls last`, [art, verbandId])).rows;
+
+/** Sperrt den Standard der Fristart: Änderungen einer Art laufen nacheinander (auch das erste Überschreiben). */
+export const fristArtSperren = (db, art) => eine(db, 'select einheit from fristen where art = $1 and verband_id is null for update', [art]);
+export const fristLesen = (db, art, verbandId) => eine(db, 'select wert, einheit from fristen where art = $1 and verband_id is not distinct from $2', [art, verbandId]);
+export const fristSetzen = (db, { art, verbandId, wert, einheit }) => eine(db,
+  `insert into fristen (art, verband_id, wert, einheit) values ($1,$2,$3,$4)
+   on conflict on constraint fristen_art_verband_uq do update set wert = excluded.wert returning id, wert, einheit`, [art, verbandId, wert, einheit]);
