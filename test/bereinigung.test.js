@@ -53,7 +53,7 @@ describe('datenschutz_bereinigen()', () => {
   });
 
   it('löscht Audit-Einträge nur jenseits der Frist', async () => {
-    await q(`insert into audit_log (zeitpunkt, tabelle, aktion) values (now() - interval '3 years', 'mitglieder', 'aendern'),
+    await q(`insert into audit_log (zeitpunkt, objekt_art, aktion) values (now() - interval '3 years', 'mitglieder', 'aendern'),
              (now() - interval '1 day', 'mitglieder', 'aendern')`);
     await q('select * from datenschutz_bereinigen()');
     const rest = await q(`select zeitpunkt from audit_log where zeitpunkt < now() - interval '2 years'`);

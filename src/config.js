@@ -36,6 +36,9 @@ export function loadConfig(overrides = {}) {
     cookieName: 'sd_refresh',
     // Back-Channel-Logout: Wartezeit vor jedem der 3 Versuche (ms)
     backchannelWartenMs: (process.env.BACKCHANNEL_WARTEN_MS || '0,1000,3000').split(',').map(Number),
+    workerIntervallSek: Number(process.env.WORKER_INTERVALL_SEK || 30),
+    // Uhr der Pipeline (ctx.jetzt), im Test ersetzbar
+    uhr: () => new Date(),
     logger: process.env.LOG === '1',
     ...overrides,
   };

@@ -18,3 +18,30 @@ export async function tx(pool, fn) {
     c.release();
   }
 }
+
+const istPool = (db) => db instanceof pg.Pool;
+
+/** Pool → eigene Transaktion, Transaktion → keine eigene (AD-2). */
+export const inTransaktion = (db, fn) => (istPool(db) ? tx(db, fn) : fn(db));
+
+export function verlangeTransaktion(db, wer) {
+  if (istPool(db)) throw new Error(`${wer} braucht die Transaktion des Aufrufers, nicht den Pool`);
+}
+
+/** Führt fn unter einem Advisory-Lock aus; hält ihn schon jemand, liefert es null ohne auszuführen. */
+export async function mitSperre(pool, name, fn) {
+  const c = await pool.connect();
+  let defekt;
+  try {
+    const { rows: [{ frei }] } = await c.query('select pg_try_advisory_lock(hashtextextended($1, 0)) frei', [name]);
+    if (!frei) return null;
+    try {
+      return await fn();
+    } finally {
+      // Scheitert das Freigeben, wird die Verbindung verworfen und damit auch die Sperre
+      await c.query('select pg_advisory_unlock(hashtextextended($1, 0))', [name]).catch((e) => { defekt = e; });
+    }
+  } finally {
+    c.release(defekt);
+  }
+}
