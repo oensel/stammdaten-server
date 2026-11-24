@@ -1,5 +1,5 @@
 <!-- bmad:context -->
-<!-- Verified 2026-11-24 against SHA_PLATZHALTER. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
+<!-- Verified 2026-11-24 against 9047fed. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## Stammdaten-Server
 
