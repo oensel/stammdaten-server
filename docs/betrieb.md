@@ -1,11 +1,11 @@
 # Betrieb auf dem VPS
 
-Stack: `docker compose` mit `db` (postgres:18), `api` (Port 4000, `node src/server.js`) und `worker` (gleiches Image, `node src/worker.js`, noch ohne Jobs). Ziele: RTO 4 h, RPO 24 h (AD-13).
+Stack: `docker compose` mit `db` (postgres:18), `api` (Port 4000, `node src/server.js`) und `worker` (gleiches Image, `node src/worker.js`, versendet Mails). Ziele: RTO 4 h, RPO 24 h (AD-13).
 
 ## Start
 
 1. `.env.prod` anlegen (Vorlage `.env.example`, `NODE_ENV=production`, `HOST=0.0.0.0`, `DATABASE_URL=postgres://stammdaten:<DB_PASSWORD>@db:5432/stammdaten`). `DB_PASSWORD` zusätzlich in der Shell bzw. in `.env` neben `docker-compose.yml` setzen.
-2. `docker compose up -d db`, danach einmalig `docker compose run --rm --no-deps api node scripts/migrieren.mjs` (nur Migrationen und Schlüssel; nie `setup.mjs`, das lädt Demodaten). Nach jedem Update erneut ausführen.
+2. `docker compose build` (bei jedem Update zuerst, sonst migriert das alte Image), `docker compose up -d db`, danach `docker compose run --rm --no-deps api node scripts/migrieren.mjs` (nur Migrationen und Schlüssel; nie `setup.mjs`, das lädt Demodaten). Nach jedem Update erneut ausführen; API und Worker starten nicht, solange Migrationen ausstehen.
 3. `docker compose up -d --build`. Prüfen: `curl http://127.0.0.1:4000/health`, `docker compose logs worker` zeigt „gestartet".
 
 PostgreSQL 18 speichert unter `/var/lib/postgresql/18/docker`; das Volume hängt deshalb an `/var/lib/postgresql`.

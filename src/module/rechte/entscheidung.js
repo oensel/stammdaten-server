@@ -3,6 +3,7 @@
 // bereich: { art: 'verein', id } oder { art: 'verband', id, ebene }; felder: null = alle Feldgruppen, sonst erlaubte Gruppen.
 // Ein Ziel ist { global } oder { vereine: [id], verbaende: [id], vorfahren: { id: [verband_id] }, heimatverein_id, judopassdaten, eigen }.
 import { BASISRECHTE, kennt } from './katalog.js';
+import { scopeFuer } from './obergrenze.js';
 
 // Nur der Landesverband des Heimatvereins (E79)
 const NUR_LV = ['mitglieder:LOESCHEN', 'personen_zusammenfuehrung:AENDERN'];
@@ -10,9 +11,6 @@ const NUR_LV = ['mitglieder:LOESCHEN', 'personen_zusammenfuehrung:AENDERN'];
 const NUR_HEIMAT = ['judopass_antrag:LESEN', 'judopass_antrag:ANLEGEN', 'judopass_antrag:AENDERN'];
 // Eigene Person und Personen mit Zugriff (FR-18), unabhängig vom Kontext
 const EIGEN = ['mitglieder:LESEN', 'graduierung:LESEN'];
-// App-Obergrenze: die Anwendung muss diesen Scope haben, auch für Super-Admins und in jedem Kontext (wie unter /v1)
-const SCOPE = { 'zugehoerigkeit:LESEN': 'benutzer:verwalten', 'zugehoerigkeit:AENDERN': 'benutzer:verwalten' };
-
 /** Schränkt eine Quelle auf den aktiven Kontext ein (FR-15, E104); null = wirkt dort nicht. `vorfahren`: Verbände über dem Kontextverein. */
 export function imKontext(quelle, kontext, vorfahren = []) {
   if (!kontext) return null;
@@ -35,7 +33,8 @@ function erlaubtQuelle(q, recht, ziel) {
   return [...(ziel.vereine ?? []), ...(ziel.verbaende ?? [])].some((id) => deckt(q.bereich, id, ziel));
 }
 
-const scopeFehlt = (ctx, recht) => Object.hasOwn(SCOPE, recht) && !ctx.rechte.scopes.includes(SCOPE[recht]);
+// App-Obergrenze: gilt für alle, auch Super-Admins, in jedem Kontext
+const scopeFehlt = (ctx, recht) => !ctx.rechte.app_scopes.includes(scopeFuer(recht));
 
 /** Einzige Rechteentscheidung: ODER über Quellen, UND innerhalb einer Quelle. Ohne Ziel gibt es nur Basisrechte. */
 export function darf(ctx, recht, ziel = {}) {

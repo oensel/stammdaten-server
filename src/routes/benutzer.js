@@ -3,7 +3,7 @@
 //   POST /benutzer/:id/passwort-zuruecksetzen       neues Startpasswort (Kinder ohne E-Mail)
 import { tx } from '../db.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { hatVerbandsrolle, pruefeBearer, widerrufeAlle } from '../auth.js';
+import { auditiere, hatVerbandsrolle, pruefeBearer, widerrufeAlle } from '../auth.js';
 import { hashSecret, startpasswort } from '../passwords.js';
 
 export default async function benutzerRoutes(app) {
@@ -49,6 +49,7 @@ export default async function benutzerRoutes(app) {
         await db.query(
           `insert into benutzer_vereine (benutzer_id, verein_id, rolle, mitglied_id, status, angefragt_ueber, entschieden_von, entschieden_am, geaendert_von)
            values ($1,$2,'mitglied',$3,'freigegeben','verwaltung',$4, now(), $4)`, [u, claims.verein_id, b.mitglied_id || null, claims.sub]);
+        await auditiere(db, claims, { aktion: 'recht_vergeben', objekt_art: 'vereinszugehoerigkeit', objekt_id: u, neu: { benutzer_id: u, verein_id: claims.verein_id, rolle: 'mitglied', status: 'freigegeben' } });
         return u;
       });
       return reply.code(201).send({ id, benutzername: b.benutzername, startpasswort: start, muss_passwort_aendern: true });

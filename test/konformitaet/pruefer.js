@@ -12,6 +12,8 @@ export const PFEILE = {
 const BLATT = ['benachrichtigung', 'audit'];
 const PIPELINE = ['zugang', 'rechte'];
 const WORKER = ['finanzen', 'lehrgaenge', 'personen', 'lizenzen', 'benachrichtigung'];
+// Tabellennamen, die auch Spaltennamen sind; für sie gilt nur die Prüfung an Tabellenpositionen
+const MEHRDEUTIG = ['rechte'];
 const GEMEINSAM = ['src/db.js', 'src/errors.js', 'src/passwords.js'] /* reine Technik */;
 
 /** Zerlegt JS in Code (ohne Kommentare, Zeichenketten durch §n§ ersetzt) und die Zeichenketten. */
@@ -52,7 +54,7 @@ export function zerlege(quelle, texte = []) {
 const SQL = /\bselect\b[\s\S]*\bfrom\b|^\s*select\s|\binsert\s+into\b|\bupdate\s+\S+[\s\S]*\bset\b|\bdelete\s+from\b|\btruncate\b|^\s*with\b[\s\S]*\bas\s*\(/i;
 export const enthaeltSql = (quelle) => {
   const { code, texte } = zerlege(quelle);
-  return texte.some((t) => SQL.test(t)) || /\.query\s*\(/.test(code);
+  return texte.some((t) => SQL.test(t)) || /\bquery\b/.test(code.replace(/\b(?:req|request)\.query\b|(?<![.\w])query\.(?!call\b|apply\b|bind\b)\w+|\bquery\s*:|\{[^{}()=]*\bquery\b[^{}()=]*\}\s*\)\s*=>/g, '')) || texte.includes('query');
 };
 
 const importe = (quelle) => {
@@ -102,10 +104,13 @@ export function pruefe({ dateien, eigentum, bekannt, altdateien = [] }) {
     if (modul && !(modul in PFEILE)) melde('unbekanntes_modul', datei, modul);
 
     const erlaubt = modul ? [...(PFEILE[modul] || []), ...(BLATT.includes(modul) ? [] : BLATT)]
-      : pipeline ? PIPELINE : datei === 'src/worker.js' ? WORKER : datei === 'src/auth.js' ? PFEILE.zugang /* Altcode von zugang */ : datei === 'src/app.js' ? Object.keys(PFEILE) : [];
+      : pipeline ? PIPELINE : datei === 'src/worker.js' ? WORKER : datei === 'src/auth.js' ? [...PFEILE.zugang, ...BLATT] /* Altcode von zugang */ : datei === 'src/app.js' ? Object.keys(PFEILE) : [];
     const oeffentlich = datei === 'src/app.js' ? 'routen.js' : 'dienst.js';
     for (const imp of importe(quelle)) {
-      if (!imp.startsWith('.')) continue;
+      if (!imp.startsWith('.')) {
+        if (modul) melde('pfeil', datei, `Modul importiert das Paket ${imp}`);
+        continue;
+      }
       const ziel = path.posix.join(path.posix.dirname(datei), imp);
       const zm = modulVon(ziel);
       if (zm && zm !== modul) {
@@ -118,12 +123,22 @@ export function pruefe({ dateien, eigentum, bekannt, altdateien = [] }) {
 
     const istDaten = modul && datei === `src/module/${modul}/daten.js`;
     if ((modul || pipeline) && !istDaten && enthaeltSql(quelle)) melde('sql', datei, 'SQL außerhalb von daten.js');
+    if (datei.startsWith('src/routes/') && texte.some((t) => t.startsWith('/v2')) && !(datei === 'src/routes/auth.js' && texte.filter((t) => t.startsWith('/v2')).join() === '/v2/auth/kontext-wechseln')) melde('v2_altroute', datei, '/v2 außerhalb der Pipeline');
     if (datei.startsWith('src/routes/') && enthaeltSql(quelle)) melde('sql_altroute', datei, 'SQL in Route');
-    if (modul && /\bnew Date\s*(?:\(\s*\)|(?!\s*\())|\bDate\.now\b/.test(code)) melde('zeit', datei, 'fachliche Zeit nur aus ctx.jetzt');
+    if (modul && /\bnew Date\s*(?:\(\s*\)|(?!\s*\())|\bDate\.now\b|(?<!new )\bDate\(|globalThis|performance\.now/.test(code)) melde('zeit', datei, 'fachliche Zeit nur aus ctx.jetzt');
     if (istDaten) {
+      const verkettet = new Set([...code.matchAll(/§(\d+)§(?:\s*\([^)]*\))*\s*\+|\+\s*§(\d+)§/g)].map((m) => texte[m[1] ?? m[2]]));
       for (const t of texte) {
-        if (/\bnow\(\)|\bcurrent_(date|timestamp|time)\b|\b(clock|statement|transaction)_timestamp\b/i.test(t)) melde('zeit', datei, 'now() im SQL');
+        if (/\bnow\(\)|\blocaltime(stamp)?\b|'now'|\bcurrent_(date|timestamp|time)\b|\b(clock|statement|transaction)_timestamp\b/i.test(t)) melde('zeit', datei, 'now() im SQL');
         if (/\b(from|join|into|update)\s+\$\{\}/i.test(t)) melde('fremde_tabelle', datei, 'dynamischer Tabellenname');
+        if (SQL.test(t) && verkettet.has(t)) melde('fremde_tabelle', datei, 'SQL durch Verkettung zusammengesetzt');
+        // Jeder bekannte Tabellenname als Wort, außer als Spalte (a.x) oder Alias (as x)
+        if (SQL.test(t) || /^\s*table\s/i.test(t)) {
+          for (const [, davor, wort] of t.toLowerCase().matchAll(/(\.\s*|\bas\s+|['\w]?)\b([a-z_]\w*)\b/g)) {
+            if (davor || !bekannt.has(wort) || wort === 'verband_pfade' || MEHRDEUTIG.includes(wort)) continue;
+            if (!(eigentum[modul] || []).includes(wort)) melde('fremde_tabelle', datei, wort);
+          }
+        }
         for (const { name, schreibt } of tabellenIn(t, bekannt)) {
           if (name === 'verband_pfade' && !schreibt) continue;
           if (!(eigentum[modul] || []).includes(name)) melde('fremde_tabelle', datei, name);

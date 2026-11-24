@@ -15,6 +15,11 @@ export default function routen(v2) {
     handler: (ctx, db, { body }) => dienst.zugehoerigkeitAnfragen(ctx, db, body),
   });
   v2({
+    method: 'POST', url: '/auth/zugehoerigkeit-anfragen', status: 201, oeffentlich: true,
+    schema: { body: objekt({ token, benutzername: { type: 'string', minLength: 1, maxLength: 200 }, passwort: { type: 'string', minLength: 1, maxLength: 200 } }, ['token', 'benutzername', 'passwort']) },
+    handler: (ctx, db, { body, cfg }) => dienst.anfragenMitPasswort(ctx, db, { ...body, cfg }),
+  });
+  v2({
     method: 'POST', url: '/auth/registrieren', status: 201, oeffentlich: true,
     schema: {
       body: objekt({

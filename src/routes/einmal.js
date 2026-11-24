@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { tx } from '../db.js';
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../errors.js';
-import { pruefeBearer, widerrufeAlle } from '../auth.js';
+import { auditiere, pruefeBearer, widerrufeAlle } from '../auth.js';
 import { erzeugeEinmalToken, liesEinmalToken, link, verbrauche } from '../einmal.js';
 import { PW_MAX, hashSecret, pruefeNeuesPasswort, verifySecret } from '../passwords.js';
 
@@ -149,7 +149,7 @@ export default async function einmalRoutes(app) {
     try {
       await tx(pool, async (db) => {
         // erst die Zugehörigkeit, dann den Link sperren: gleiche Reihenfolge wie beim Entzug (zugang), der offene Einladungen verbraucht
-        await db.query('select 1 from benutzer_vereine where benutzer_id = $1 and verein_id = $2 for update', [u.id, t.verein_id]);
+        const alt = (await db.query('select rolle, status from benutzer_vereine where benutzer_id = $1 and verein_id = $2 for update', [u.id, t.verein_id])).rows[0];
         if (!(await verbrauche(db, t.id))) throw unauthorized(UNGUELTIG, 'link_ungueltig');
         if (umzug) {
           // nur, wenn das alte Konto die Adresse noch unbestätigt führt
@@ -170,6 +170,10 @@ export default async function einmalRoutes(app) {
            on conflict (benutzer_id, verein_id) do update set status = 'freigegeben', rolle = excluded.rolle, geloescht_am = null,
              mitglied_id = coalesce(excluded.mitglied_id, benutzer_vereine.mitglied_id), entschieden_am = now()`,
           [u.id, t.verein_id, t.rolle || 'mitglied', t.mitglied_id, t.erstellt_von]);
+        await auditiere(db, { sub: u.id, verein_id: t.verein_id, azp: 'system:einladung' }, {
+          aktion: 'recht_vergeben', objekt_art: 'vereinszugehoerigkeit', objekt_id: u.id, alt: umzug ? null : alt,
+          neu: { verein_id: t.verein_id, rolle: t.rolle || 'mitglied', rechte: t.rechte, status: 'freigegeben' }, grund: `Einladung von ${t.erstellt_von}`,
+        });
         for (const r of t.rechte) {
           await db.query(
             `insert into benutzer_rechte (benutzer_id, verein_id, recht_id, vergeben_von) select $1, $2, id, $4 from rechte where schluessel = $3

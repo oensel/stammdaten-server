@@ -72,7 +72,7 @@ async function meldeVerbandswechsel(ctx, c, verein, altLv) {
   const lvs = [altLv, neuLv].filter(Boolean);
   const empfaenger = await rollentraeger(ctx, c, { verband_ids: lvs.map((v) => v.id), rolle: 'lv_admin' });
   await benachrichtigung.senden(ctx, c, {
-    empfaenger, art: 'verein_verbandswechsel', daten: { verein: verein.name, alt: altLv?.name ?? 'ohne Verband', neu: neuLv.name },
+    empfaenger, art: 'verein_verbandswechsel', daten: { verein: verein.name, alt: altLv?.name ?? 'ohne Verband', neu: neuLv?.name ?? 'ohne Verband' },
   });
 }
 

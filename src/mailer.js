@@ -6,6 +6,7 @@ export function createMailer(cfg, log = console) {
   if (cfg.smtp.host) {
     transporter = nodemailer.createTransport({
       host: cfg.smtp.host, port: cfg.smtp.port, secure: cfg.smtp.secure,
+      connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
       auth: cfg.smtp.user ? { user: cfg.smtp.user, pass: cfg.smtp.password } : undefined,
     });
   }

@@ -4,6 +4,7 @@ import { ladeMailAdresse } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPool, mitSperre } from './db.js';
 import { createMailer } from './mailer.js';
+import { verlangeAktuellesSchema } from './migrate.js';
 import { versendeMails } from './module/benachrichtigung/dienst.js';
 import { systemCtx } from './pipeline/ctx.js';
 
@@ -11,7 +12,7 @@ const log = (text) => console.log(`[worker] ${new Date().toISOString()} ${text}`
 
 /** Alle Jobs: Name → Dienstaufruf mit System-ctx. */
 const JOBS = {
-  mailversand: (ctx, pool, { mailer }) => versendeMails(ctx, pool, { mailer, adresseVon: ladeMailAdresse }),
+  mailversand: (ctx, pool, { mailer, abbruch }) => versendeMails(ctx, pool, { mailer, adresseVon: ladeMailAdresse, abbruch }),
 };
 
 /** Führt einen Job unter seinem Advisory-Lock aus; läuft er schon anderswo, passiert nichts (null). */
@@ -25,8 +26,7 @@ export const fuehreAus = (pool, name, umgebung, { jetzt } = {}) =>
 export async function starteWorker({ databaseUrl, mailer, intervallMs, beenden = (code) => process.exit(code) } = {}) {
   const cfg = loadConfig();
   const pool = createPool(databaseUrl ?? cfg.databaseUrl);
-  pool.on('error', (e) => log(`Datenbankverbindung verloren: ${e.message}`));
-  const umgebung = { mailer: mailer ?? createMailer(cfg) };
+  const umgebung = { mailer: mailer ?? createMailer(cfg), abbruch: () => gestoppt };
   let takt;
   let lauf = Promise.resolve();
   let laeuft = false;
@@ -62,7 +62,7 @@ export async function starteWorker({ databaseUrl, mailer, intervallMs, beenden =
   process.on('SIGINT', aufSignal);
   process.on('SIGTERM', aufSignal);
   try {
-    await pool.query('select 1');
+    await verlangeAktuellesSchema(pool);
   } catch (e) {
     process.off('SIGINT', aufSignal);
     process.off('SIGTERM', aufSignal);

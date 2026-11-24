@@ -4,7 +4,7 @@
 // Bestehende Anmeldungen bleiben gültig; Rechte stehen im nächsten Access-Token (Refresh liest sie neu, siehe auth.js ladeKontext).
 import { tx } from '../db.js';
 import { badRequest, fehler, forbidden } from '../errors.js';
-import { pruefeBearer } from '../auth.js';
+import { auditiere, pruefeBearer } from '../auth.js';
 
 export default async function rechteRoutes(app) {
   const pool = app.pool;
@@ -44,23 +44,34 @@ export default async function rechteRoutes(app) {
     const { claims, recht, vereinId, benutzerId } = await vorbereiten(req);
     const b = req.body || {};
     if (b.gueltig_von && b.gueltig_bis && b.gueltig_bis < b.gueltig_von) throw badRequest('gueltig_bis liegt vor gueltig_von', 'zeitraum_ungueltig');
-    const r = await tx(pool, (db) => db.query(
+    const r = await tx(pool, async (db) => {
+      // gegen gleichzeitigen Entzug: die Zugehörigkeit muss beim Schreiben noch freigegeben sein
+      const frei = await db.query(`select 1 from benutzer_vereine where benutzer_id = $1 and verein_id = $2 and status = 'freigegeben' and geloescht_am is null for share`, [benutzerId, vereinId]);
+      if (!frei.rowCount) throw fehler(404, 'Benutzer nicht im Verein', 'benutzer_unbekannt');
+      const alt = (await db.query('select gueltig_von, gueltig_bis, attribute from benutzer_rechte where benutzer_id = $1 and verein_id = $2 and recht_id = $3 and geloescht_am is null', [benutzerId, vereinId, recht.id])).rows[0];
+      const neu = await db.query(
       `insert into benutzer_rechte (benutzer_id, verein_id, recht_id, gueltig_von, gueltig_bis, attribute, vergeben_von, geaendert_von)
        values ($1,$2,$3,$4,$5,$6,$7,$7)
        on conflict (benutzer_id, verein_id, recht_id) do update
          set gueltig_von = excluded.gueltig_von, gueltig_bis = excluded.gueltig_bis, attribute = excluded.attribute,
              geloescht_am = null, geaendert_von = excluded.geaendert_von, geaendert_am = now()
        returning gueltig_von, gueltig_bis, attribute`,
-      [benutzerId, vereinId, recht.id, b.gueltig_von ?? null, b.gueltig_bis ?? null, JSON.stringify(b.attribute ?? {}), claims.sub]));
+      [benutzerId, vereinId, recht.id, b.gueltig_von ?? null, b.gueltig_bis ?? null, JSON.stringify(b.attribute ?? {}), claims.sub]);
+      await auditiere(db, claims, { aktion: 'recht_vergeben', objekt_art: 'benutzer', objekt_id: benutzerId, alt: alt && { recht: recht.schluessel, ...alt }, neu: { recht: recht.schluessel, verein_id: vereinId, ...neu.rows[0] } });
+      return neu;
+    });
     return { benutzer_id: benutzerId, verein_id: vereinId, recht: recht.schluessel, ...r.rows[0] };
   });
 
   app.delete('/benutzer/:id/rechte/:schluessel', { schema: { params } }, async (req, reply) => {
     const { claims, recht, vereinId, benutzerId } = await vorbereiten(req);
-    await pool.query(
+    await tx(pool, async (db) => {
+      const weg = await db.query(
       `update benutzer_rechte set geloescht_am = now(), geaendert_am = now(), geaendert_von = $4
         where benutzer_id = $1 and verein_id = $2 and recht_id = $3 and geloescht_am is null`,
       [benutzerId, vereinId, recht.id, claims.sub]);
+      if (weg.rowCount) await auditiere(db, claims, { aktion: 'recht_entzogen', objekt_art: 'benutzer', objekt_id: benutzerId, alt: { recht: recht.schluessel, verein_id: vereinId } });
+    });
     return reply.code(204).send();
   });
 }

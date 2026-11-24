@@ -2,7 +2,14 @@ import pg from 'pg';
 
 // date bleibt "YYYY-MM-DD" (sonst Zeitzonen-Verschiebung im JSON); bigint als String (Standard)
 pg.types.setTypeParser(1082, (v) => v);
-export const createPool = (url) => new pg.Pool({ connectionString: url, max: 10 });
+// Ohne error-Listener beendet ein Verbindungsverlust den ganzen Prozess; laufende Abfragen melden den Fehler ohnehin selbst.
+export function createPool(url) {
+  const pool = new pg.Pool({ connectionString: url, max: 10 });
+  const melde = (e) => console.error(`[db] Verbindung verloren: ${e.message}`);
+  pool.on('error', melde);
+  pool.on('connect', (c) => c.on('error', melde));
+  return pool;
+}
 
 export async function tx(pool, fn) {
   const c = await pool.connect();

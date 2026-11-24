@@ -51,3 +51,19 @@ export const benutzerAnlegen = (db, b) => eine(db,
 
 export const einladungenVerbrauchen = (db, { benutzerId, vereinId, jetzt }) => db.query(
   `update einmal_tokens set benutzt_am = $3 where benutzer_id = $1 and verein_id = $2 and zweck = 'einladung' and benutzt_am is null`, [benutzerId, vereinId, jetzt]);
+
+/** Beendet die Bezüge eines Benutzers auf Mitglieder eines Vereins: eigenes Mitglied und Kinder. */
+export async function mitgliedsbezuegeBeenden(db, { benutzerId, vereinId, jetzt }) {
+  await db.query('update benutzer_vereine set mitglied_id = null where benutzer_id = $1 and verein_id = $2 and mitglied_id is not null', [benutzerId, vereinId]);
+  await db.query('update erziehungsberechtigte set geloescht_am = $3 where benutzer_id = $1 and verein_id = $2 and geloescht_am is null', [benutzerId, vereinId, jetzt]);
+}
+
+/** Konto zur Anmeldung mit Passwort (Benutzername oder E-Mail), mit Sperrzustand. */
+export const kontoFuerAnmeldung = (db, { kennung, jetzt }) => eine(db,
+  `select id, passwort_hash, coalesce(gesperrt_bis > $2, false) as gesperrt from benutzer
+    where (lower(benutzername) = lower($1) or lower(email) = lower($1)) and aktiv and geloescht_am is null
+    order by (lower(benutzername) = lower($1)) desc limit 1`, [kennung, jetzt]);
+export const fehlversuch = (db, { id, max, sperreBis }) => db.query(
+  `update benutzer set gesperrt_bis = case when fehlversuche + 1 >= $2 then $3::timestamptz else gesperrt_bis end,
+          fehlversuche = case when fehlversuche + 1 >= $2 then 0 else fehlversuche + 1 end where id = $1`, [id, max, sperreBis]);
+export const fehlversucheZuruecksetzen = (db, id) => db.query('update benutzer set fehlversuche = 0 where id = $1', [id]);
