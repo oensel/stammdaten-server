@@ -2,11 +2,16 @@ export const direktrechteBeenden = (db, { benutzerId, vereinId, von, jetzt }) =>
   'update benutzer_rechte set geloescht_am = $3, geaendert_von = $4 where benutzer_id = $1 and verein_id = $2 and geloescht_am is null',
   [benutzerId, vereinId, jetzt, von]);
 
-export const rollenMitRechten = async (db, schluessel) => (await db.query(
-  `select r.schluessel, coalesce(array_agg(b.recht || ':' || b.operation) filter (where b.recht is not null), '{}') as rechte,
+const MIT_RECHTEN = `select r.schluessel, coalesce(array_agg(b.recht || ':' || b.operation) filter (where b.recht is not null), '{}') as rechte,
           coalesce(jsonb_object_agg(b.recht || ':' || b.operation, to_jsonb(f)) filter (where f.id is not null), '{}') as filter
-     from rollen r left join rollen_berechtigungen b on b.rolle_id = r.id left join datenfilter f on f.id = b.datenfilter_id
-    where r.verein_id is null and r.schluessel = any($1) group by r.id order by r.schluessel`, [schluessel])).rows;
+     from rollen r left join rollen_berechtigungen b on b.rolle_id = r.id left join datenfilter f on f.id = b.datenfilter_id`;
+export const rollenMitRechten = async (db, schluessel) => (await db.query(
+  `${MIT_RECHTEN} where r.verein_id is null and r.schluessel = any($1) group by r.id order by r.schluessel`, [schluessel])).rows;
+
+/** Vereinseigene Rollen, die der Benutzer im Verein hat. */
+export const eigeneRollenMitRechten = async (db, { benutzerId, vereinId }) => (await db.query(
+  `${MIT_RECHTEN} where r.verein_id = $2 and r.id in (select rolle_id from benutzer_vereinsrollen where benutzer_id = $1 and verein_id = $2 and beendet_am is null)
+    group by r.id order by r.schluessel`, [benutzerId, vereinId])).rows;
 
 /** 1 = Dachverband … 4 = Kreis */
 export const ebene = async (db, verbandId) => (await db.query('select count(*)::int n from verband_pfade where nachfahr_id = $1', [verbandId])).rows[0].n;
@@ -43,3 +48,45 @@ export const stellvertreterAktiv = async (db, amtId) => (await db.query(
 export const rolleBeenden = async (db, { id, von, grund, jetzt }) => (await db.query(
   `update benutzer_verbandsrollen set beendet_am = $2, beendet_von = $3, grund = coalesce($4, grund) where id = $1
    returning id, benutzer_id, verband_id, rolle, stellvertreter_von`, [id, jetzt, von, grund ?? null])).rows[0];
+
+// ---- vereinseigene Rollen (Story 2.7) ----
+export const vereinsrollenLesen = async (db, vereinId) => (await db.query(
+  `select r.id, r.schluessel, r.name,
+          coalesce((select array_agg(b.recht || ':' || b.operation order by b.recht, b.operation) from rollen_berechtigungen b where b.rolle_id = r.id), '{}') as berechtigungen,
+          (select count(*)::int from benutzer_vereinsrollen v where v.rolle_id = r.id and v.beendet_am is null) as vergeben
+     from rollen r where r.verein_id = $1 and not r.ist_system order by r.name`, [vereinId])).rows;
+
+export const vereinsrolleSperren = async (db, { id, vereinId }) => (await db.query(
+  'select id, schluessel, name from rollen where id = $1 and verein_id = $2 and not ist_system for update', [id, vereinId])).rows[0];
+
+export const vereinsrolleAnlegen = async (db, { vereinId, schluessel, name }) => (await db.query(
+  `insert into rollen (schluessel, name, ebene, verein_id) values ($1, $2, 'verein', $3) returning id, schluessel, name`, [schluessel, name, vereinId])).rows[0];
+
+export const vereinsrolleUmbenennen = (db, { id, name }) => db.query('update rollen set name = $2 where id = $1', [id, name]);
+
+export const berechtigungenErsetzen = async (db, { rolleId, berechtigungen }) => {
+  await db.query('delete from rollen_berechtigungen where rolle_id = $1', [rolleId]);
+  for (const b of berechtigungen) {
+    const [recht, operation] = b.split(':');
+    await db.query('insert into rollen_berechtigungen (rolle_id, recht, operation) values ($1,$2,$3)', [rolleId, recht, operation]);
+  }
+};
+
+export const vereinsrolleVergeben = async (db, { rolleId, vereinId }) => (await db.query(
+  'select count(*)::int n from benutzer_vereinsrollen where rolle_id = $1 and verein_id = $2 and beendet_am is null', [rolleId, vereinId])).rows[0].n;
+
+export const vereinsrolleLoeschen = async (db, id) => {
+  await db.query('delete from benutzer_vereinsrollen where rolle_id = $1', [id]); // nur beendete Vergaben, der Verlauf liegt im Audit
+  await db.query('delete from rollen where id = $1', [id]);
+};
+
+export const vereinsrolleZuweisen = async (db, { benutzerId, vereinId, rolleId, von, jetzt }) => (await db.query(
+  `insert into benutzer_vereinsrollen (benutzer_id, verein_id, rolle_id, erstellt_von, erstellt_am) values ($1,$2,$3,$4,$5)
+   returning id, benutzer_id, verein_id, rolle_id`, [benutzerId, vereinId, rolleId, von, jetzt])).rows[0];
+
+export const vereinsrolleEntziehen = async (db, { benutzerId, vereinId, rolleId, von, jetzt }) => (await db.query(
+  `update benutzer_vereinsrollen set beendet_am = $4, beendet_von = $5
+    where benutzer_id = $1 and verein_id = $2 and rolle_id = $3 and beendet_am is null returning id, benutzer_id, verein_id, rolle_id`,
+  [benutzerId, vereinId, rolleId, jetzt, von])).rows[0];
+
+export const positivliste = async (db) => (await db.query('select schluessel from katalog_rechte where vereinsrolle_erlaubt')).rows.map((r) => r.schluessel);

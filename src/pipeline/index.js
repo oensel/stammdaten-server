@@ -61,7 +61,7 @@ async function ladeCtx(app, req) {
     ...basis, kontext,
     rechte: {
       app_scopes,
-      quellen: await ladeQuellen(null, app.pool, { kontext, rolle: k.rolle, rechte: k.rechte }),
+      quellen: await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
     },
