@@ -3,7 +3,7 @@ import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, pruefeBearer } fro
 import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeVerbandsrollen } from '../module/rechte/dienst.js';
-import { baueCtx } from './ctx.js';
+import { baueCtx, systemCtx } from './ctx.js';
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CODE = {
@@ -70,7 +70,7 @@ function leseIfMatch(req) {
 /**
  * Registriert /v2-Routen: `registriereV2(app, (v2) => v2({ method, url, schema, status, ifMatch, handler }))`.
  * `handler(ctx, db, { params, query, body, version })` ruft genau einen Dienst auf; `db` ist der Pool.
- * Mit `ifMatch` ist der Header Pflicht (428), `version` ist dann die change_seq daraus. Ein Ergebnis mit change_seq bekommt ein ETag.
+ * `oeffentlich`: ohne Anmeldung, ctx ist dann system:oeffentlich ohne Rechte. Mit `ifMatch` ist der Header Pflicht (428), `version` ist dann die change_seq daraus. Ein Ergebnis mit change_seq bekommt ein ETag.
  */
 export async function registriereV2(app, definiere) {
   await app.register(async (scope) => {
@@ -78,9 +78,12 @@ export async function registriereV2(app, definiere) {
     scope.setNotFoundHandler((req, reply) => v2Fehler(notFound(), req, reply));
     scope.decorateRequest('ctx', null);
     // Anmeldung vor Körper und Schema: Unangemeldete erfahren nichts über die Route
-    scope.addHook('onRequest', async (req) => { if (!req.is404) req.ctx = await ladeCtx(app, req); });
-    definiere(({ method, url, schema, status = 200, ifMatch = false, handler }) => scope.route({
-      method, url, schema,
+    scope.addHook('onRequest', async (req) => { 
+      if (req.is404) return;
+      req.ctx = req.routeOptions.config.oeffentlich ? systemCtx('oeffentlich', { jetzt: app.cfg.uhr() }) : await ladeCtx(app, req);
+    });
+    definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, handler }) => scope.route({
+      method, url, schema, config: { oeffentlich },
       handler: async (req, reply) => {
         const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
         if (ergebnis?.change_seq) reply.header('ETag', `"${ergebnis.change_seq}"`);

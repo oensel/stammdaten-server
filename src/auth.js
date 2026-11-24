@@ -61,25 +61,17 @@ export const ladeBenutzerFuerKontext = async (db, id) =>
   (await db.query('select id, ist_super_admin, muss_passwort_aendern, heimatverein_id from benutzer where id = $1', [id])).rows[0];
 
 /**
- * Verbandskontext (FR-15): nur wählbar, wenn der Benutzer dort eine aktive Rolle hat (sonst null). Vereinsrechte wirken darin nicht;
+ * Verbandskontext (FR-15): nur wählbar, wenn der Benutzer dort eine aktive Rolle hat und einem Verein angehört (FR-14), sonst null. Vereinsrechte wirken darin nicht;
  * die alten Claims bleiben leer.
  */
 export async function ladeVerbandskontext(db, benutzer, verbandId) {
+  const imVerein = benutzer.ist_super_admin || (await db.query(
+    `select 1 from benutzer_vereine bv join vereine v on v.id = bv.verein_id and v.geloescht_am is null
+      where bv.benutzer_id = $1 and bv.status = 'freigegeben' and bv.geloescht_am is null limit 1`, [benutzer.id])).rowCount;
+  if (!imVerein) return null;
   const rollen = (await ladeVerbandsrollen(null, db, { benutzer_id: benutzer.id })).filter((r) => r.verband_id === verbandId).map((r) => r.rolle).sort();
   if (!rollen.length) return null;
   return { verein_id: null, verband_id: verbandId, verbandsrollen: rollen, rolle: null, rechte: [], mitglied_id: null, mitglied_ids: [], super_admin: benutzer.ist_super_admin };
-}
-
-/** Startkontext ohne Vorgabe: Verein wie bisher; wer keinen Verein hat, startet im ersten Verband mit Rolle. */
-export async function ladeStartkontext(db, benutzer, vereinId, opt) {
-  try {
-    return await ladeKontext(db, benutzer, vereinId, opt);
-  } catch (e) {
-    if (e.code !== 'kein_verein') throw e;
-    const [erste] = (await ladeVerbandsrollen(null, db, { benutzer_id: benutzer.id })).sort((a, b) => a.verband_id.localeCompare(b.verband_id));
-    if (!erste) throw e;
-    return ladeVerbandskontext(db, benutzer, erste.verband_id);
-  }
 }
 
 /** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
@@ -256,12 +248,12 @@ export async function rotiere(app, refreshToken, { clientId = null, vereinId = n
   try {
     // Verbandskontext: bleibt, solange die Rolle besteht; sonst zurück zum Startkontext
     kontext = (!vereinId && rt.verband_id && await ladeVerbandskontext(pool, benutzer, rt.verband_id))
-      || await ladeStartkontext(pool, benutzer, vereinId || rt.verein_id, { ohneWahl });
+      || await ladeKontext(pool, benutzer, vereinId || rt.verein_id, { ohneWahl });
   } catch (e) {
     if (e.status !== 403 && e.status !== 409) throw e;
     if (vereinId) throw e; // ?verein= gehört der Person nicht: Anfrage ablehnen, Anmeldung bleibt bestehen
     if (!rt.geraet_id) { // gemerkter Verein nicht mehr gültig → Heimatverein/erster Verein
-      try { kontext = await ladeStartkontext(pool, benutzer, null, { ohneWahl }); } catch { /* unten */ }
+      try { kontext = await ladeKontext(pool, benutzer, null, { ohneWahl }); } catch { /* unten */ }
     }
     if (!kontext) throw await beenden('Zugang zum Verein nicht mehr gültig', 'kein_zugang_zum_verein');
   }

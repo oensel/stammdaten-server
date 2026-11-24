@@ -1,24 +1,78 @@
 import { inTransaktion } from '../../db.js';
-import { conflict, fehler, notFound } from '../../errors.js';
+import { conflict, fehler, notFound, tooMany } from '../../errors.js';
+import { hashSecret, neuesToken, pruefeNeuesPasswort, sha256 } from '../../passwords.js';
 import * as audit from '../audit/dienst.js';
+import * as benachrichtigung from '../benachrichtigung/dienst.js';
 import { beendeDirektrechte, ladeVerbandsrollen, verlange, wirksameBerechtigungen } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
-/** FR-14: eigene Zugehörigkeit zu einem Verein anfragen. Rechte wirken erst nach der Freigabe. */
-export function zugehoerigkeitAnfragen(ctx, db, { verein_id }) {
-  if (!ctx.benutzer) throw notFound();
-  return inTransaktion(db, async (c) => {
-    let neu;
-    try {
-      neu = await daten.anfragen(c, { benutzerId: ctx.benutzer.id, vereinId: verein_id });
-    } catch (e) {
-      if (e.code === '23503') throw notFound(); // Verein gibt es nicht
-      throw e;
-    }
-    if (!neu) throw conflict('Die Zugehörigkeit besteht oder ist schon angefragt', 'zugehoerigkeit_vorhanden');
-    await beendeDirektrechte(ctx, c, { benutzer_id: ctx.benutzer.id, verein_id });
-    return neu;
+const MAX_OFFEN = 100; // offene Anfragen je Verein: begrenzt Missbrauch eines weitergegebenen Codes
+
+/** Prüft den QR-Code in der Transaktion; liefert die Verein-ID. Unbekannt, abgelaufen und widerrufen sehen gleich aus. */
+async function pruefeQr(ctx, c, token) {
+  const qr = await daten.qrGueltig(c, { hash: sha256(token), jetzt: ctx.jetzt });
+  if (!qr) throw notFound('QR-Code ungültig oder abgelaufen');
+  if (await daten.offeneAnfragen(c, qr.verein_id) >= MAX_OFFEN) throw tooMany('Zu viele offene Anfragen in diesem Verein');
+  return qr.verein_id;
+}
+
+async function anfrageAnlegen(ctx, c, { benutzer_id, verein_id }) {
+  const neu = await daten.anfragen(c, { benutzerId: benutzer_id, vereinId: verein_id });
+  if (!neu) throw conflict('Die Zugehörigkeit besteht oder ist schon angefragt', 'zugehoerigkeit_vorhanden');
+  await beendeDirektrechte(ctx, c, { benutzer_id, verein_id });
+  const n = await daten.benutzerName(c, benutzer_id);
+  await benachrichtigung.senden(ctx, c, {
+    empfaenger: await daten.vereinsAdmins(c, verein_id), art: 'zugehoerigkeit_angefragt',
+    daten: { name: [n.vorname, n.nachname].filter(Boolean).join(' ') || n.benutzername },
   });
+  return neu;
+}
+
+/** FR-14: ein bestehender Benutzer scannt den QR-Code eines Vereins. Rechte wirken erst nach der Freigabe. */
+export const zugehoerigkeitAnfragen = (ctx, db, { token }) => inTransaktion(db, async (c) =>
+  anfrageAnlegen(ctx, c, { benutzer_id: ctx.benutzer.id, verein_id: await pruefeQr(ctx, c, token) }));
+
+/**
+ * Öffentliche Registrierung mit QR-Code. Ohne E-Mail: Eine ungeprüfte fremde Adresse würde dem Konto später deren Einladung
+ * verschaffen. Die Anmeldung gelingt erst, wenn der Verein freigibt.
+ */
+export async function registrieren(ctx, db, { token, benutzername, vorname, nachname, passwort }) {
+  pruefeNeuesPasswort(passwort, benutzername);
+  await inTransaktion(db, (c) => pruefeQr(ctx, c, token)); // vor dem teuren Hash
+  const hash = await hashSecret(passwort);
+  try {
+    return await inTransaktion(db, async (c) => {
+      const verein_id = await pruefeQr(ctx, c, token);
+      const { id } = await daten.benutzerAnlegen(c, { benutzername, vorname, nachname, hash });
+      const { status } = await anfrageAnlegen(ctx, c, { benutzer_id: id, verein_id });
+      return { benutzer_id: id, verein_id, status };
+    });
+  } catch (e) {
+    if (e.constraint === 'benutzer_benutzername_uq') throw conflict('Benutzername schon vergeben', 'schon_vorhanden');
+    throw e;
+  }
+}
+
+export function qrCodeAnlegen(ctx, db, { verein_id, gueltig_tage = 90 }) {
+  verlange(ctx, 'zugehoerigkeit:AENDERN', { verein_id });
+  return inTransaktion(db, async (c) => {
+    const token = neuesToken();
+    const ablauf = new Date(ctx.jetzt.getTime() + gueltig_tage * 86_400_000);
+    const qr = await daten.qrAnlegen(c, { vereinId: verein_id, hash: sha256(token), von: ctx.benutzer.id, jetzt: ctx.jetzt, ablauf });
+    return { ...qr, token }; // nur hier im Klartext; den QR-Code zeichnet die Oberfläche
+  });
+}
+
+export async function qrCodesLesen(ctx, db, { verein_id }) {
+  verlange(ctx, 'zugehoerigkeit:LESEN', { verein_id });
+  return { qr_codes: await daten.qrListe(db, verein_id) };
+}
+
+export async function qrCodeWiderrufen(ctx, db, { verein_id, id }) {
+  verlange(ctx, 'zugehoerigkeit:AENDERN', { verein_id });
+  const qr = await daten.qrWiderrufen(db, { id, vereinId: verein_id, jetzt: ctx.jetzt });
+  if (!qr) throw notFound();
+  return qr;
 }
 
 export async function zugehoerigkeitenLesen(ctx, db, { verein_id, status = null }) {

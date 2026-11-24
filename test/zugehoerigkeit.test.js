@@ -1,5 +1,4 @@
 // Story 2.2 (FR-14): Vereinszugehörigkeit mit Freigabe
-import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { verbandsbaum } from './fabrik.js';
 import { neueApp } from './helper.js';
@@ -27,7 +26,11 @@ const ruf = async (method, pfad, payload, { tok = admin, version, x = verein } =
   });
   return { status: r.statusCode, body: r.json() };
 };
-const anfrage = (tok) => ruf('POST', '', undefined, { tok, x: null });
+let code;
+const anfrage = async (tok) => {
+  code ??= (await t.app.inject({ method: 'POST', url: `/v2/vereine/${verein}/qr-codes`, payload: {}, headers: { authorization: `Bearer ${admin}`, 'x-verein': verein } })).json().token;
+  return t.api('POST', '/v2/zugehoerigkeiten', { token: code }, tok);
+};
 const zeile = async () => (await q('select * from benutzer_vereine where id = $1', [id]))[0];
 const entscheide = async (entscheidung, extra = {}) => ruf('PATCH', `/${id}`, { entscheidung, ...extra }, { version: (await zeile()).change_seq });
 const vereineImToken = async (n) => (await t.login(n)).body.benutzer.vereine.map((v) => v.id);
@@ -92,11 +95,9 @@ it('ablehnen, erneut anfragen; unzulässige Übergänge werden abgewiesen', asyn
   expect(await anfrage(await token('eltern1'))).toMatchObject({ status: 201, body: { id, status: 'angefragt' } });
 });
 
-it('schützt das eigene Konto und Super-Admins; unbekannter Verein 404', async () => {
+it('schützt das eigene Konto und Super-Admins', async () => {
   const eigene = (await q('select id, change_seq from benutzer_vereine where benutzer_id = $1 and verein_id = $2', [await benutzer('admin1'), verein]))[0];
   expect((await ruf('PATCH', `/${eigene.id}`, { entscheidung: 'entziehen' }, { version: eigene.change_seq })).body.code).toBe('konto_geschuetzt');
   await q(`update benutzer set ist_super_admin = true where benutzername = 'eltern1'`);
   expect((await entscheide('freigeben')).body.code).toBe('konto_geschuetzt');
-  const r = await t.app.inject({ method: 'POST', url: `/v2/vereine/${randomUUID()}/zugehoerigkeiten`, headers: { authorization: `Bearer ${anderer}` } });
-  expect(r.statusCode).toBe(404);
 });

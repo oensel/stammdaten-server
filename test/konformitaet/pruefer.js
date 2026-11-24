@@ -12,7 +12,7 @@ export const PFEILE = {
 const BLATT = ['benachrichtigung', 'audit'];
 const PIPELINE = ['zugang', 'rechte'];
 const WORKER = ['finanzen', 'lehrgaenge', 'personen', 'lizenzen', 'benachrichtigung'];
-const GEMEINSAM = ['src/db.js', 'src/errors.js'];
+const GEMEINSAM = ['src/db.js', 'src/errors.js', 'src/passwords.js'] /* reine Technik */;
 
 /** Zerlegt JS in Code (ohne Kommentare, Zeichenketten durch §n§ ersetzt) und die Zeichenketten. */
 export function zerlege(quelle, texte = []) {

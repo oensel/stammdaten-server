@@ -1,7 +1,7 @@
 // Anmeldung: POST /auth/login, /auth/pin, /auth/logout, /oauth/token (refresh_token)
 import { tx } from '../db.js';
 import { badRequest, forbidden, notFound, tooMany, unauthorized } from '../errors.js';
-import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeStartkontext, ladeVerbandskontext, pruefeBearer, rotiere, stelleAus, widerrufeAlle, widerrufeFamilie } from '../auth.js';
+import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, pruefeBearer, rotiere, stelleAus, widerrufeAlle, widerrufeFamilie } from '../auth.js';
 import { PIN_RE, PW_MAX, sha256, verifyDummy, verifySecret } from '../passwords.js';
 import { v2Fehler } from '../pipeline/index.js';
 import { signJwt } from '../jwt.js';
@@ -83,7 +83,7 @@ export default async function authRoutes(app) {
   async function melde({ benutzer, vereinId, anwendung, geraet, geraetToken, web = false }) {
     return tx(pool, async (db) => {
       // SSO: Web-Anmeldung ohne Pflicht-Vereinswahl (die App wählt aus `vereine` im Token); Geräte bleiben an einen Verein gebunden
-      const kontext = await ladeStartkontext(db, benutzer, vereinId, { ohneWahl: web && !geraet });
+      const kontext = await ladeKontext(db, benutzer, vereinId, { ohneWahl: web && !geraet });
       const geraetId = await geraetFuer(db, { benutzer, kontext, anwendung, geraet });
       if (geraetToken && !geraetId) throw badRequest('geraet_token braucht ein Gerät', 'geraet_fehlt');
       await db.query(
