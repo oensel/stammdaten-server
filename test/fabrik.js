@@ -20,6 +20,14 @@ export async function verbandsbaum(db) {
   return { djb, lv, bezirk, kreis, verein: await verein(db, kreis) };
 }
 
+/** Meldet an und wechselt in den Verbandskontext; liefert das Access-Token. */
+export async function verbandsToken(t, benutzername, verbandId) {
+  const { body } = await t.login(benutzername);
+  const r = await t.api('POST', '/v2/auth/kontext-wechseln', { art: 'verband', id: verbandId }, body.access_token);
+  if (r.status !== 200) throw new Error(`Kontextwechsel: ${r.status} ${r.body.code}`);
+  return r.body.access_token;
+}
+
 /** Gibt einem Demo-Zugang eine Verbandsrolle. */
 export const gibRolle = (db, benutzername, rolle, verbandId) => db.query(
   'insert into benutzer_verbandsrollen (benutzer_id, verband_id, rolle) select id, $2, $3 from benutzer where benutzername = $1', [benutzername, verbandId, rolle]);

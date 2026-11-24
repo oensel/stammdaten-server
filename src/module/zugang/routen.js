@@ -5,6 +5,7 @@ const objekt = (properties, required = []) => ({ type: 'object', additionalPrope
 const BASIS = '/vereine/:verein_id/zugehoerigkeiten';
 
 export default function routen(v2) {
+  v2({ method: 'GET', url: '/ich', handler: (ctx, db) => dienst.ichLesen(ctx, db) });
   v2({
     method: 'POST', url: BASIS, status: 201, schema: { params: objekt({ verein_id: uuid }, ['verein_id']) },
     handler: (ctx, db, { params }) => dienst.zugehoerigkeitAnfragen(ctx, db, { verein_id: params.verein_id }),

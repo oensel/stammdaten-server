@@ -29,12 +29,18 @@ async function ladeCtx(app, req) {
   const benutzer = await ladeBenutzerFuerKontext(app.pool, claims.sub);
   // Geräte-Tokens (PIN am Tablet) tragen keine Verbands- und Super-Admin-Rechte
   if (claims.geraet_id) benutzer.ist_super_admin = false;
-  const verbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
+  const alleVerbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
   const basis = { benutzer: Object.freeze({ id: benutzer.id }), anwendung: anwendung.schluessel, jetzt };
   const vereinId = gewaehlt || claims.verein_id;
+  // FR-15: genau ein Kontext. Verbandsrollen wirken nur im Kontext ihres Verbands, Vereinsrechte nur im Verein.
+  if (!gewaehlt && claims.kontext?.art === 'verband') {
+    const verbandsrollen = alleVerbandsrollen.filter((r) => r.verband_id === claims.kontext.id);
+    if (!verbandsrollen.length) throw notFound();
+    return baueCtx({ ...basis, kontext: Object.freeze({ art: 'verband', id: claims.kontext.id }), rechte: { verbandsrollen, super_admin: benutzer.ist_super_admin } });
+  }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
-    return baueCtx({ ...basis, rechte: { verbandsrollen, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
+    return baueCtx({ ...basis, rechte: { super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
   }
   let k;
   try {
@@ -46,7 +52,7 @@ async function ladeCtx(app, req) {
   return baueCtx({
     ...basis, kontext: Object.freeze({ art: 'verein', id: k.verein_id }),
     rechte: {
-      verbandsrollen, rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
+      rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
     },
   });

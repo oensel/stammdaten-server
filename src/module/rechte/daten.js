@@ -2,6 +2,10 @@ export const direktrechteBeenden = (db, { benutzerId, vereinId, von, jetzt }) =>
   'update benutzer_rechte set geloescht_am = $3, geaendert_von = $4 where benutzer_id = $1 and verein_id = $2 and geloescht_am is null',
   [benutzerId, vereinId, jetzt, von]);
 
+export const berechtigungen = async (db, rollen) => (await db.query(
+  `select distinct b.recht || ':' || b.operation as recht from rollen r join rollen_berechtigungen b on b.rolle_id = r.id
+    where r.verein_id is null and r.schluessel = any($1) order by 1`, [rollen])).rows.map((r) => r.recht);
+
 export const systemrollen = async (db) => (await db.query(
   `select r.id, r.schluessel, r.name, r.ebene, r.verband_typen,
           coalesce((select array_agg(b.recht || ':' || b.operation order by b.recht, b.operation) from rollen_berechtigungen b where b.rolle_id = r.id), '{}') as berechtigungen
