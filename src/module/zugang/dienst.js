@@ -156,6 +156,13 @@ export async function zweitenFaktorPruefen(ctx, db, { id, eingabe, entschluessel
   return daten.backupCodeVerbrauchen(db, { id, hash: sha256(eingabe.trim().toLowerCase()), jetzt: ctx.jetzt });
 }
 
+/** Neue Backup-Codes; die alten verfallen sofort. Nur im Klartext in der Antwort. */
+export async function backupCodesErneuern(ctx, db, { id }) {
+  const codes = neueBackupCodes();
+  await inTransaktion(db, (c) => daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) }));
+  return codes;
+}
+
 export async function totpEinrichten(ctx, db, { id, benutzername, verschluesseln }) {
   const geheimnis = neuesGeheimnis();
   await daten.totpGeheimnisSetzen(db, { id, wert: verschluesseln(geheimnis) });

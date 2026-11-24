@@ -14,7 +14,8 @@
     "db:migrieren": "node scripts/migrieren.mjs",
     "test": "vitest run",
     "db:test": "node scripts/schema-test.mjs",
-    "client:secret": "node scripts/client-secret.mjs"
+    "client:secret": "node scripts/client-secret.mjs",
+    "2fa:reset": "node scripts/zwei-faktor-zuruecksetzen.mjs"
   },
   "devDependencies": {
     "embedded-postgres": "18.7.0-beta.19",
