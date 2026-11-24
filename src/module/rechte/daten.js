@@ -1,3 +1,7 @@
+export const direktrechteBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
+  'update benutzer_rechte set geloescht_am = $3, geaendert_von = $4 where benutzer_id = $1 and verein_id = $2 and geloescht_am is null',
+  [benutzerId, vereinId, jetzt, von]);
+
 export const systemrollen = async (db) => (await db.query(
   `select r.id, r.schluessel, r.name, r.ebene, r.verband_typen,
           coalesce((select array_agg(b.recht || ':' || b.operation order by b.recht, b.operation) from rollen_berechtigungen b where b.rolle_id = r.id), '{}') as berechtigungen
