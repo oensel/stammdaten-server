@@ -79,8 +79,10 @@ export async function katalogLesen(ctx, db) {
 
 /** Wirksame Rollenschlüssel und Berechtigungen im aktiven Kontext (FR-16). */
 export function wirksameBerechtigungen(ctx) {
-  const { quellen } = ctx.rechte;
-  return { rollen: quellen.map((q) => q.schluessel).sort(), berechtigungen: [...new Set([...BASISRECHTE, ...quellen.flatMap((q) => q.rechte)])].sort() };
+  const { quellen, app_scopes: scopes } = ctx.rechte;
+  // Was die App-Obergrenze verbietet, wirkt nicht und wird auch nicht als Recht genannt (Review 28)
+  const nutzbar = (r) => BASISRECHTE.includes(r) || scopes.includes(scopeFuer(r));
+  return { rollen: quellen.map((q) => q.schluessel).sort(), berechtigungen: [...new Set([...BASISRECHTE, ...quellen.flatMap((q) => q.rechte).filter(nutzbar)])].sort() };
 }
 
 // ---- Verbandsrollen und Stellvertreter (FR-21, Story 2.6) ----
