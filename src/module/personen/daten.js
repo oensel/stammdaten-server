@@ -44,3 +44,16 @@ export const zugriffBeenden = (db, { id, von, jetzt }) => eine(db,
 export const personenFuerBenutzer = async (db, benutzerId) => (await db.query(
   `select ${PERSON} from personen where benutzer_id = $1
       or id in (select person_id from personen_zugriffe where benutzer_id = $1 and widerrufen_am is null) order by lower(nachname), lower(vorname), id`, [benutzerId])).rows;
+
+// ---- Dokumente ----
+const DOKUMENT = 'id, art, dateiname, mime_typ, groesse, erstellt_am, geaendert_am';
+export const dokumenteVon = async (db, personId) => (await db.query(
+  `select ${DOKUMENT} from dokumente where person_id = $1 and geloescht_am is null order by erstellt_am, id`, [personId])).rows;
+export const dokumentInhalt = (db, { id, personId }) => eine(db,
+  'select art, dateiname, mime_typ, inhalt from dokumente where id = $1 and person_id = $2 and geloescht_am is null', [id, personId]);
+export const dokumentAnlegen = (db, d) => eine(db,
+  `insert into dokumente (person_id, verein_id, art, dateiname, mime_typ, groesse, inhalt, geaendert_von) values ($1,$2,$3,$4,$5,$6,$7,$8) returning ${DOKUMENT}`,
+  [d.personId, d.vereinId, d.art, d.name, d.mime, d.inhalt.length, d.inhalt, d.von]);
+export const passfotoErsetzen = (db, d) => eine(db,
+  `update dokumente set dateiname = $2, mime_typ = $3, groesse = $4, inhalt = $5, geaendert_von = $6
+    where person_id = $1 and art = 'passfoto' and geloescht_am is null returning ${DOKUMENT}`, [d.personId, d.name, d.mime, d.inhalt.length, d.inhalt, d.von]);

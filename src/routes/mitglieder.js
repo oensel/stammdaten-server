@@ -137,7 +137,9 @@ export default async function mitgliederRoutes(app) {
     if (!(s.has(scope) || (s.has('mitglieder:selbst') && eigene))) throw forbidden('Dafür fehlt die Berechtigung', 'scope_fehlt');
     const vereinId = verein(claims, req.query);
     const m = (await pool.query(
-      'select 1 from mitglieder where id = $1 and verein_id = $2 and geloescht_am is null and anonymisiert_am is null', [req.params.id, vereinId])).rows[0];
+      // nur im Heimatverein: das Foto gehört der Person (FR-75)
+      `select 1 from mitglieder m join personen p on p.id = m.person_id and p.heimatverein_id = m.verein_id
+        where m.id = $1 and m.verein_id = $2 and m.geloescht_am is null and m.anonymisiert_am is null`, [req.params.id, vereinId])).rows[0];
     if (!m) throw notFound();
     return { claims, vereinId };
   };
@@ -158,7 +160,7 @@ export default async function mitgliederRoutes(app) {
     const basis = name.replace(/\.[^.]*$/, '').replace(/[^\w-]+/g, '_').slice(0, 60) || 'passfoto';
     const dateiname = `${basis}.${typ[1]}`;
     await tx(pool, async (db) => {
-      const alt = (await db.query(`select id from dokumente where mitglied_id = $1 and art = 'passfoto' and geloescht_am is null`, [req.params.id])).rows[0];
+      const alt = (await db.query(`select id from dokumente where person_id = (select person_id from mitglieder where id = $1) and art = 'passfoto' and geloescht_am is null`, [req.params.id])).rows[0];
       if (alt) {
         await db.query('update dokumente set dateiname = $2, mime_typ = $3, groesse = $4, inhalt = $5, geaendert_am = now(), geaendert_von = $6 where id = $1',
           [alt.id, dateiname, typ[0], bild.length, bild, claims.sub]);
@@ -173,7 +175,7 @@ export default async function mitgliederRoutes(app) {
 
   app.get('/mitglieder/:id/passfoto', { schema: { params: idParam } }, async (req, reply) => {
     await fotoZugriff(req, false);
-    const d = (await pool.query(`select mime_typ, inhalt from dokumente where mitglied_id = $1 and art = 'passfoto' and geloescht_am is null`, [req.params.id])).rows[0];
+    const d = (await pool.query(`select mime_typ, inhalt from dokumente where person_id = (select person_id from mitglieder where id = $1) and art = 'passfoto' and geloescht_am is null`, [req.params.id])).rows[0];
     if (!d) throw notFound('Kein Passfoto hinterlegt');
     return reply.header('Content-Type', d.mime_typ).header('Cache-Control', 'private, no-store').send(d.inhalt);
   });
@@ -182,7 +184,7 @@ export default async function mitgliederRoutes(app) {
     const { claims } = await fotoZugriff(req, true);
     await pool.query(
       `update dokumente set inhalt = null, groesse = 0, geloescht_am = now(), geaendert_am = now(), geaendert_von = $2
-        where mitglied_id = $1 and art = 'passfoto' and geloescht_am is null`, [req.params.id, claims.sub]);
+        where person_id = (select person_id from mitglieder where id = $1) and art = 'passfoto' and geloescht_am is null`, [req.params.id, claims.sub]);
     return reply.code(204).send();
   });
 }

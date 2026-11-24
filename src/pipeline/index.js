@@ -89,6 +89,7 @@ export async function registriereV2(app, definiere) {
     scope.setErrorHandler(v2Fehler);
     scope.setNotFoundHandler((req, reply) => v2Fehler(notFound(), req, reply));
     scope.decorateRequest('ctx', null);
+    scope.addContentTypeParser(['application/octet-stream', 'application/pdf', 'image/jpeg', 'image/png', 'image/webp'], { parseAs: 'buffer' }, (req, body, done) => done(null, body));
     // Anmeldung vor Körper und Schema: Unangemeldete erfahren nichts über die Route
     scope.addHook('onRequest', async (req) => { 
       if (req.is404) return;
@@ -97,13 +98,18 @@ export async function registriereV2(app, definiere) {
     // Review 24: IDs sind kleingeschrieben, Großbuchstaben in einer UUID sind dieselbe ID (sonst 404 bzw. Vergleich verfehlt)
     scope.addHook('preValidation', async (req) => {
       for (const teil of [req.params, req.query, req.body]) {
-        if (teil && typeof teil === 'object') for (const [k, v] of Object.entries(teil)) if (typeof v === 'string' && /(^|_)id$/.test(k) && UUID.test(v)) teil[k] = v.toLowerCase();
+        if (teil && typeof teil === 'object' && !Buffer.isBuffer(teil)) for (const [k, v] of Object.entries(teil)) if (typeof v === 'string' && /(^|_)id$/.test(k) && UUID.test(v)) teil[k] = v.toLowerCase();
       }
     });
-    definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, handler }) => scope.route({
-      method, url, schema, config: { oeffentlich },
+    definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, bodyLimit, handler }) => scope.route({
+      method, url, schema, ...(bodyLimit ? { bodyLimit } : {}), config: { oeffentlich },
       handler: async (req, reply) => {
         const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, cfg: app.cfg, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
+        if (ergebnis?.datei) {
+          const { mime, name, inhalt } = ergebnis.datei;
+          return reply.type(mime).header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff')
+            .header('Content-Disposition', `attachment; filename="${name.replace(/[^\w.-]/g, '_')}"`).send(inhalt);
+        }
         if (ergebnis?.change_seq) reply.header('ETag', `"${ergebnis.change_seq}"`);
         reply.status(status);
         return ergebnis;
