@@ -28,3 +28,23 @@ export const sperren = (db, { id, vereinId }) => eine(db,
 export const entscheiden = (db, { id, status, rolle, von, jetzt }) => eine(db,
   `update benutzer_vereine bv set status = $2, rolle = $3, entschieden_von = $4, entschieden_am = $5, geaendert_von = $4
     where id = $1 returning ${SPALTEN}`, [id, status, rolle, von, jetzt]);
+
+export const qrAnlegen = (db, c) => eine(db,
+  `insert into vereins_qr_codes (verein_id, token_hash, erstellt_von, erstellt_am, laeuft_ab_am) values ($1,$2,$3,$4,$5)
+   returning id, erstellt_am, laeuft_ab_am`, [c.vereinId, c.hash, c.von, c.jetzt, c.ablauf]);
+export const qrListe = async (db, vereinId) => (await db.query(
+  'select id, erstellt_am, laeuft_ab_am, widerrufen_am from vereins_qr_codes where verein_id = $1 order by erstellt_am desc', [vereinId])).rows;
+export const qrWiderrufen = async (db, { id, vereinId, jetzt }) => eine(db,
+  `update vereins_qr_codes set widerrufen_am = coalesce(widerrufen_am, $3) where id = $1 and verein_id = $2
+   returning id, erstellt_am, laeuft_ab_am, widerrufen_am`, [id, vereinId, jetzt]);
+/** Gültiger Code; die Zeilensperre hält einen gleichzeitigen Widerruf bis zum Ende der Transaktion auf. */
+export const qrGueltig = (db, { hash, jetzt }) => eine(db,
+  'select verein_id from vereins_qr_codes where token_hash = $1 and widerrufen_am is null and laeuft_ab_am > $2 for update', [hash, jetzt]);
+
+export const offeneAnfragen = async (db, vereinId) => (await eine(db,
+  `select count(*)::int n from benutzer_vereine where verein_id = $1 and status = 'angefragt' and geloescht_am is null`, [vereinId])).n;
+export const vereinsAdmins = async (db, vereinId) => (await db.query(
+  `select benutzer_id from benutzer_vereine where verein_id = $1 and rolle = 'admin' and status = 'freigegeben' and geloescht_am is null`, [vereinId])).rows;
+export const benutzerName = (db, id) => eine(db, 'select benutzername, vorname, nachname from benutzer where id = $1', [id]);
+export const benutzerAnlegen = (db, b) => eine(db,
+  'insert into benutzer (benutzername, vorname, nachname, passwort_hash) values ($1,$2,$3,$4) returning id', [b.benutzername, b.vorname, b.nachname, b.hash]);

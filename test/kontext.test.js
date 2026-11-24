@@ -81,13 +81,12 @@ it('Entzug wirkt unter /v2 sofort und spätestens mit der Erneuerung: zurück zu
   expect(claims(neu.access_token)).not.toHaveProperty('kontext');
 });
 
-it('wer nur eine Verbandsrolle hat, startet im Verband; ohne Verein und Rolle bleibt es bei kein_verein', async () => {
+it('ohne freigegebenen Verein keine Anmeldung, auch nicht mit Verbandsrolle; ein Verbandskontext endet mit dem letzten Verein', async () => {
+  await gibRolle(t.pool, 'pruefer1', 'lv_admin', baum.lv);
+  const v = (await wechsle('verband', baum.lv, (await t.login('pruefer1')).body.access_token)).body;
   await q(`update benutzer_vereine set status = 'gesperrt' where benutzer_id = (select id from benutzer where benutzername = 'pruefer1')`);
   expect((await t.login('pruefer1')).body.code).toBe('kein_verein');
-  await gibRolle(t.pool, 'pruefer1', 'lv_admin', baum.lv);
-  const { body } = await t.login('pruefer1');
-  expect(claims(body.access_token).kontext).toEqual({ art: 'verband', id: baum.lv });
-  expect((await t.refresh(body.refresh_token)).status).toBe(200);
+  expect((await t.refresh(v.refresh_token)).status).toBe(401);
 });
 
 it('verlangt eine Anmeldung und gültige Eingaben', async () => {
