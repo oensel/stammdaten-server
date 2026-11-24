@@ -59,7 +59,7 @@ describe('Rechte vergeben und entziehen', () => {
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [sa, verein]);
     expect((await t.api('PUT', `/benutzer/${sa}/rechte/trainer`, null, admin)).body.code).toBe('konto_geschuetzt');
 
-    const v2 = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Anderer', true) returning id`)).rows[0].id;
+    const v2 = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Anderer', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const fremd = (await t.pool.query(`insert into benutzer (benutzername) values ('fremder') returning id`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [fremd, v2]);
     expect((await t.api('PUT', `/benutzer/${fremd}/rechte/trainer`, null, admin)).status).toBe(404);

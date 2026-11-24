@@ -12,7 +12,7 @@ beforeAll(async () => {
   t = await neueApp({ backchannelWartenMs: [0, 20, 40] });
   jcDemo = (await t.pool.query(`select id from vereine where name = 'JC Demo'`)).rows[0].id;
   adminId = (await t.pool.query(`select id from benutzer where benutzername = 'admin1'`)).rows[0].id;
-  zweit = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('JC Zweit', true) returning id`)).rows[0].id;
+  zweit = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Zweit', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
   await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [adminId, zweit]);
   await t.pool.query(`insert into benutzer_rechte (benutzer_id, verein_id, recht_id) select $1,$2,id from rechte where schluessel = 'pruefer'`, [adminId, zweit]);
   // JC Zweit nutzt Kyu-Manager und Dojo-Master; JC Demo nur Kyu-Manager (bereits aus dem Seed)
@@ -55,7 +55,7 @@ describe('Access-Token (SSO)', () => {
   });
 
   it('Verein ohne freigegebene App erscheint nicht; ohne jede App bleiben aud und vereine leer', async () => {
-    const leer = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Ohne App', true) returning id`)).rows[0].id;
+    const leer = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Ohne App', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [adminId, leer]);
     const { payload } = await t.pruefe((await t.login('admin1', web)).body.access_token);
     expect(Object.keys(payload.vereine)).not.toContain(leer);
@@ -100,7 +100,7 @@ describe('Refresh gehört zur Sitzung', () => {
     expect(body.refresh_token).toBeUndefined(); // Web: nur im Cookie
     expect(cookieAus(r)).toBeTruthy();
     // fremder Verein → 403, Anmeldung bleibt bestehen
-    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremd', true) returning id`)).rows[0].id;
+    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremd', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const neu = cookieAus(r);
     const f = await t.app.inject({ method: 'POST', url: `/oauth/token?verein=${fremd}`, headers: { cookie: `sd_refresh=${neu}` }, payload: { grant_type: 'refresh_token' } });
     expect(f.statusCode).toBe(403);

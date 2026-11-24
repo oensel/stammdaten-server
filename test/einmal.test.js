@@ -82,7 +82,7 @@ describe('Einladungen', () => {
   });
 
   it('bestehendes Konto (gleiche E-Mail) bekommt nur die Zugehörigkeit zum neuen Verein', async () => {
-    const v = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('JC Zweit', true) returning id`)).rows[0].id;
+    const v = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Zweit', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     // Admin des Zweitvereins
     const b = (await t.pool.query(`insert into benutzer (benutzername, passwort_hash) values ('admin2', (select passwort_hash from benutzer where benutzername = 'admin1')) returning id`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'admin','freigegeben')`, [b, v]);

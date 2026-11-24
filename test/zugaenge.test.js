@@ -37,7 +37,7 @@ describe('Schüler-Zugänge durch Trainer', () => {
     expect((await t.api('POST', '/benutzer', { benutzername: 'lena2', mitglied_id: lena }, tr.access_token)).status).toBe(409);
     expect((await t.api('POST', '/benutzer', { benutzername: 'Schueler1' }, tr.access_token)).status).toBe(409);
     expect((await t.api('POST', '/benutzer', { benutzername: 'zzz', mitglied_id: '00000000-0000-4000-8000-000000000000' }, tr.access_token)).status).toBe(404);
-    const v = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremd', true) returning id`)).rows[0].id;
+    const v = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremd', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const fremd = (await t.pool.query(`insert into mitglieder (verein_id, mitgliedsnr, vorname, nachname) values ($1,1,'F','F') returning id`, [v])).rows[0].id;
     expect((await t.api('POST', '/benutzer', { benutzername: 'fremdling', mitglied_id: fremd }, tr.access_token)).status).toBe(404);
   });
@@ -69,7 +69,7 @@ describe('Schüler-Zugänge durch Trainer', () => {
     for (const n of ['pruefer1', 'admin1', 'trainer1']) {
       expect((await t.api('POST', `/benutzer/${await idVon(n)}/passwort-zuruecksetzen`, null, tr.access_token)).status).toBe(403);
     }
-    const v = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremd2', true) returning id`)).rows[0].id;
+    const v = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremd2', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const b = (await t.pool.query(`insert into benutzer (benutzername, passwort_hash) values ('fremdkind', 'x') returning id`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [b, v]);
     expect((await t.api('POST', `/benutzer/${b}/passwort-zuruecksetzen`, null, tr.access_token)).status).toBe(404);
@@ -79,7 +79,7 @@ describe('Schüler-Zugänge durch Trainer', () => {
 
   it('Konto in mehreren Vereinen ist gegen Zurücksetzen geschützt; Admin darf Trainer zurücksetzen', async () => {
     const ad = (await t.login('admin1')).body;
-    const zweit = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('JC Zweit', true) returning id`)).rows[0].id;
+    const zweit = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Zweit', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const sid = await idVon('eltern1');
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [sid, zweit]);
     expect((await t.api('POST', `/benutzer/${sid}/passwort-zuruecksetzen`, null, ad.access_token)).status).toBe(403);

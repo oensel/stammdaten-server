@@ -95,7 +95,7 @@ describe('Login und Claims', () => {
   });
 
   it('mehrere Vereine: Verein muss gewählt werden', async () => {
-    const v = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('JC Zweit', true) returning id`)).rows[0].id;
+    const v = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('JC Zweit', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const b = (await t.pool.query(`select id from benutzer where benutzername = 'trainer1'`)).rows[0].id;
     await t.pool.query(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'mitglied','freigegeben')`, [b, v]);
     const r = await t.login('trainer1');

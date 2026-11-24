@@ -107,7 +107,7 @@ describe('GET /v1/abgleich', () => {
   });
 
   it('403: nicht freigegebener Verein, Benutzer-Token, andere App ohne Zuordnung; 401 ohne Token', async () => {
-    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant) values ('Fremder Verein', true) returning id`)).rows[0].id;
+    const fremd = (await t.pool.query(`insert into vereine (name, ist_mandant, verband_id) values ('Fremder Verein', true, (select id from verbaende where typ = 'kreis' limit 1)) returning id`)).rows[0].id;
     const r = await t.api('GET', `/v1/abgleich?verein_id=${fremd}`, null, token);
     expect(r.status).toBe(403);
     expect(r.body.code).toBe('verein_nicht_freigegeben');

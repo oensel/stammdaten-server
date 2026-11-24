@@ -14,6 +14,7 @@ import abgleichRoutes from './routes/abgleich.js';
 import graduierungenRoutes from './routes/graduierungen.js';
 import rechteRoutes from './routes/rechte.js';
 import anwendungenRoutes from './routes/anwendungen.js';
+import organisationRouten from './module/organisation/routen.js';
 import { registriereV2 } from './pipeline/index.js';
 import { registriereBackchannel } from './backchannel.js';
 import { createMailer } from './mailer.js';
@@ -30,7 +31,7 @@ export async function buildApp(overrides = {}) {
   app.setNotFoundHandler((req, reply) => errorHandler(notFound(), req, reply));
 
   // Apps laufen als https://localhost (Android/Capacitor), capacitor://localhost (iOS) – Bearer-Tokens, keine Cookies
-  await app.register(cors, { origin: cfg.corsOrigins, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', 'X-Verein', 'If-Match'], credentials: true, maxAge: 600 });
+  await app.register(cors, { origin: cfg.corsOrigins, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', 'X-Verein', 'If-Match'], exposedHeaders: ['ETag'], credentials: true, maxAge: 600 });
   app.addHook('onSend', async (req, reply) => { if (!reply.hasHeader('cache-control')) reply.header('Cache-Control', 'no-store'); });
 
   app.get('/.well-known/jwks.json', async (req, reply) => {
@@ -57,7 +58,7 @@ export async function buildApp(overrides = {}) {
   await app.register(abgleichRoutes);
   await app.register(graduierungenRoutes);
   await app.register(rechteRoutes);
-  await registriereV2(app, (v2) => { for (const definiere of overrides.v2Routen || []) definiere(v2); });
+  await registriereV2(app, (v2) => { for (const definiere of [organisationRouten, ...(overrides.v2Routen || [])]) definiere(v2); });
 
   app.addHook('onClose', async () => { if (!overrides.pool) await app.pool.end(); });
   return app;
