@@ -46,3 +46,13 @@ Mindestens quartalsweise und nach Änderungen am Stack:
 4. Zeilenzahlen mit der Produktivdatenbank vergleichen, danach den privaten Schlüssel vom VPS entfernen.
 
 Die CI (Job `betrieb`) prüft Skripte und Ablauf mit Demodaten; sie ersetzt die Probe auf dem VPS nicht.
+
+## Zweiter Faktor des Super-Admins zurücksetzen
+
+Hat ein Super-Admin Gerät und Backup-Codes verloren, setzt der Betreiber den Faktor auf dem Server zurück (im Container der API):
+
+```
+npm run 2fa:reset -- <benutzername>
+```
+
+Das Konto verliert seine Sitzungen und richtet den Faktor beim nächsten Login neu ein. Mit Gerät, aber ohne Codes: `POST /auth/2fa/backup-codes` mit gültiger Sitzung und aktuellem Code erneuert die Backup-Codes.

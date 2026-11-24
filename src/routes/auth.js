@@ -129,6 +129,19 @@ export default async function authRoutes(app) {
     return { backup_codes: codes };
   });
 
+  // Backup-Codes erneuern: nur mit gültiger Sitzung und einem aktuellen Code; ein falscher Code zählt als Fehlversuch
+  app.post('/auth/2fa/backup-codes', {
+    schema: { body: { type: 'object', additionalProperties: false, required: ['code'], properties: { code: { type: 'string', minLength: 1, maxLength: 30 } } } },
+  }, async (req, reply) => {
+    const claims = await pruefeBearer(app, req);
+    const u = await mfa.benutzer(claims.sub);
+    if (!u?.ist_super_admin || !u.totp_aktiv_am) throw forbidden('Kein zweiter Faktor eingerichtet', 'kein_zweiter_faktor');
+    if (u.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
+    if (!await mfa.pruefen(u.id, req.body.code)) return fehlversuch(u);
+    reply.header('Cache-Control', 'no-store');
+    return { backup_codes: await mfa.neueBackupCodes(u.id) };
+  });
+
   /* ---------- Login ---------- */
   app.post('/auth/login', {
     schema: {

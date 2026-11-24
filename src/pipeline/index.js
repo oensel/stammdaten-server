@@ -120,6 +120,7 @@ export const zweiterFaktor = (pool, cfg) => {
     benutzer: (id) => zugang.mfaBenutzerLesen(ctx(), pool, { id }),
     pruefen: (id, eingabe) => zugang.zweitenFaktorPruefen(ctx(), pool, { id, eingabe, ...krypto }),
     einrichten: (u) => zugang.totpEinrichten(ctx(), pool, { id: u.id, benutzername: u.benutzername, ...krypto }),
+    neueBackupCodes: (id) => zugang.backupCodesErneuern(ctx(), pool, { id }),
     bestaetigen: (u, eingabe) => zugang.totpBestaetigen(ctx(), pool, { id: u.id, eingabe, ...krypto }),
   };
 };

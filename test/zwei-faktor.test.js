@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { code, schrittFuer } from '../src/passwords.js';
 import { neueApp } from './helper.js';
@@ -81,5 +82,34 @@ describe('Zweiter Faktor für den Super-Admin (Story 2.9)', () => {
     expect((await t.api('POST', '/auth/2fa/einrichten', { einrichtungs_token: 'x.y.z' })).status).toBe(401);
     const zugriff = (await t.login('schueler1')).body.access_token;
     expect((await t.api('POST', '/auth/2fa/einrichten', { einrichtungs_token: zugriff })).status).toBe(401);
+  });
+
+  it('Backup-Codes erneuern: nur mit aktuellem Code, die alten verfallen', async () => {
+    await t.pool.query(`update benutzer set fehlversuche = 0, gesperrt_bis = null where benutzername = 'eltern1'`);
+    naechsterSchritt();
+    const sitzung = (await t.login('eltern1', { code: code(geheimnis, schrittFuer(jetzt)) })).body.access_token;
+    expect((await t.api('POST', '/auth/2fa/backup-codes', { code: '000000' }, sitzung)).status).toBe(401);
+    expect((await t.api('POST', '/auth/2fa/backup-codes', { code: '123456' })).status).toBe(401); // ohne Sitzung
+    naechsterSchritt();
+    const r = await t.api('POST', '/auth/2fa/backup-codes', { code: code(geheimnis, schrittFuer(jetzt)) }, sitzung);
+    expect(r.status).toBe(200);
+    expect(r.body.backup_codes).toHaveLength(10);
+    expect((await t.login('eltern1', { code: backup[3] })).status).toBe(401); // alter Code
+    expect((await t.login('eltern1', { code: r.body.backup_codes[0] })).status).toBe(200);
+  });
+
+  it('normale Benutzer können keine Backup-Codes erneuern', async () => {
+    const tok = (await t.login('schueler1')).body.access_token;
+    expect((await t.api('POST', '/auth/2fa/backup-codes', { code: '123456' }, tok)).status).toBe(403);
+  });
+
+  it('Betreiber-Skript setzt den Faktor zurück, beendet Sitzungen und verlangt danach die Neueinrichtung', async () => {
+    const lauf = (name) => execFileSync('node', ['scripts/zwei-faktor-zuruecksetzen.mjs', name], { env: { ...process.env, DATABASE_URL: t.pool.options.connectionString }, encoding: 'utf8' });
+    expect(() => lauf('schueler1')).toThrow(); // kein Super-Admin
+    expect(lauf('eltern1')).toContain('zurückgesetzt');
+    expect((await t.pool.query(`select totp_aktiv_am, totp_secret_verschluesselt from benutzer where benutzername = 'eltern1'`)).rows[0]).toEqual({ totp_aktiv_am: null, totp_secret_verschluesselt: null });
+    expect((await t.pool.query(`select count(*)::int n from totp_backup_codes`)).rows[0].n).toBe(0);
+    expect((await t.pool.query(`select count(*)::int n from refresh_tokens where benutzer_id = (select id from benutzer where benutzername = 'eltern1') and widerrufen_am is null`)).rows[0].n).toBe(0);
+    expect((await t.login('eltern1')).body.zweiter_faktor).toBe('einrichten');
   });
 });
