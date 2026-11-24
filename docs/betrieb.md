@@ -26,6 +26,16 @@ PostgreSQL 18 speichert unter `/var/lib/postgresql/18/docker`; das Volume hängt
 
 **Offen:** Die Übertragung außerhalb des VPS fehlt noch; die Sicherung liegt verschlüsselt im lokalen Verzeichnis. Ein externes Ziel ersetzt später nur die Funktion `ablegen` im Skript.
 
+## Wiederherstellung im Ernstfall
+
+Auf einem leeren Stack (neues Volume, `api` und `worker` gestoppt; vorher `docker compose build` mit dem passenden Codestand):
+
+1. `docker compose up -d --wait db`
+2. Sicherung einspielen: `age -d -i /root/probe.key <datei>.dump.age | docker compose exec -T db pg_restore -U stammdaten -d stammdaten --no-owner --exit-on-error`
+3. `docker compose run --rm --no-deps api node scripts/migrieren.mjs`
+4. **Pflicht vor dem Start:** `docker compose exec -T db psql -U stammdaten -d stammdaten -c 'select abgleich_neu_beginnen()'`. Ohne diesen Schritt liefert der Abgleich Bestandsdaten nicht aus. Danach gleichen alle Apps einmal vollständig neu ab (`409 abgleich_neu_starten`).
+5. `docker compose up -d api worker`, `/health` prüfen, privaten Schlüssel entfernen.
+
 ## Restore-Probe (SYS-OPS-001)
 
 Mindestens quartalsweise und nach Änderungen am Stack:

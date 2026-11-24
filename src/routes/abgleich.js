@@ -10,8 +10,9 @@ import { pruefeAnwendungsToken } from '../auth.js';
 
 const VERSION = '1';
 
-const hashObergrenze = (a) => createHash('sha256')
-  .update(JSON.stringify([[...a.client_scopes].sort(), a.lizenz_arten ? [...a.lizenz_arten].sort() : null]))
+// Epoche 0 lässt den Fingerabdruck wie bisher; nach einem Restore (docs/betrieb.md) macht sie alte Stände ungültig
+const hashObergrenze = (a, epoche) => createHash('sha256')
+  .update(JSON.stringify([[...a.client_scopes].sort(), a.lizenz_arten ? [...a.lizenz_arten].sort() : null, ...(epoche ? [epoche] : [])]))
   .digest('hex').slice(0, 12);
 const stand = (x, hash) => Buffer.from(`${VERSION}.${x}.${hash}`).toString('base64url');
 const leseStand = (s, hash) => {
@@ -37,7 +38,8 @@ export default async function abgleichRoutes(app) {
     const { verein_id: vereinId, seit, limit } = req.query;
     const { anw } = await pruefeAnwendungsToken(app, req, { vereinId });
 
-    const hash = hashObergrenze(anw);
+    const { epoche } = (await pool.query('select epoche from abgleich_epoche')).rows[0];
+    const hash = hashObergrenze(anw, epoche);
     let von = '0';
     if (seit) {
       von = leseStand(seit, hash);

@@ -222,7 +222,8 @@ export default async function authRoutes(app) {
     const web = !!cookieLesen(req);
     const out = await tx(pool, async (db) => {
       const kontext = await ladeKontext(db, benutzer, req.body.verein_id);
-      await widerrufeFamilie(db, claims.sid);
+      const offen = await widerrufeFamilie(db, claims.sid);
+      if (!offen.rowCount) throw unauthorized('Abgemeldet', 'abgemeldet');
       return stelleAus(app, db, { benutzer, kontext, anwendung });
     });
     reply.header('Cache-Control', 'no-store');

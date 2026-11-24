@@ -10,7 +10,7 @@ const NUR_LV = ['mitglieder:LOESCHEN', 'personen_zusammenfuehrung:AENDERN'];
 const NUR_HEIMAT = ['judopass_antrag:LESEN', 'judopass_antrag:ANLEGEN', 'judopass_antrag:AENDERN'];
 // Eigene Person und Personen mit Zugriff (FR-18), unabhängig vom Kontext
 const EIGEN = ['mitglieder:LESEN', 'graduierung:LESEN'];
-// App-Obergrenze: im Vereinskontext muss die Anwendung diesen Scope haben (wie unter /v1)
+// App-Obergrenze: die Anwendung muss diesen Scope haben, auch für Super-Admins und in jedem Kontext (wie unter /v1)
 const SCOPE = { 'zugehoerigkeit:LESEN': 'benutzer:verwalten', 'zugehoerigkeit:AENDERN': 'benutzer:verwalten' };
 
 /** Schränkt eine Quelle auf den aktiven Kontext ein (FR-15, E104); null = wirkt dort nicht. `vorfahren`: Verbände über dem Kontextverein. */
@@ -35,15 +35,16 @@ function erlaubtQuelle(q, recht, ziel) {
   return [...(ziel.vereine ?? []), ...(ziel.verbaende ?? [])].some((id) => deckt(q.bereich, id, ziel));
 }
 
-const scopeFehlt = (ctx, recht) => Object.hasOwn(SCOPE, recht) && ctx.kontext?.art === 'verein' && !ctx.rechte.super_admin && !ctx.rechte.scopes.includes(SCOPE[recht]);
+const scopeFehlt = (ctx, recht) => Object.hasOwn(SCOPE, recht) && !ctx.rechte.scopes.includes(SCOPE[recht]);
 
 /** Einzige Rechteentscheidung: ODER über Quellen, UND innerhalb einer Quelle. Ohne Ziel gibt es nur Basisrechte. */
 export function darf(ctx, recht, ziel = {}) {
   if (!kennt(recht)) throw new Error(`Unbekanntes Recht: ${recht}`);
   if (!ctx.benutzer) return false;
-  if (BASISRECHTE.includes(recht) || ctx.rechte.super_admin) return true;
-  if (ziel.eigen && EIGEN.includes(recht)) return true;
+  if (BASISRECHTE.includes(recht)) return true;
   if (scopeFehlt(ctx, recht)) return false;
+  if (ctx.rechte.super_admin) return true;
+  if (ziel.eigen && EIGEN.includes(recht)) return true;
   return ctx.rechte.quellen.some((q) => erlaubtQuelle(q, recht, ziel));
 }
 
@@ -55,8 +56,9 @@ export function listenbereich(ctx, recht, { judopassdaten = false } = {}) {
   if (!kennt(recht)) throw new Error(`Unbekanntes Recht: ${recht}`);
   const leer = { alle: false, vereine: [], verbaende: [] };
   if (!ctx.benutzer) return leer;
-  if (BASISRECHTE.includes(recht) || ctx.rechte.super_admin) return { ...leer, alle: true };
+  if (BASISRECHTE.includes(recht)) return { ...leer, alle: true };
   if (scopeFehlt(ctx, recht)) return leer;
+  if (ctx.rechte.super_admin) return { ...leer, alle: true };
   const nurLv = NUR_LV.includes(recht) || (recht === 'mitglieder:AENDERN' && judopassdaten);
   const b = ctx.rechte.quellen.filter((q) => q.rechte.includes(recht) && (!nurLv || q.bereich.ebene === 'landesverband')).map((q) => q.bereich);
   const ids = (art) => [...new Set(b.filter((x) => x.art === art).map((x) => x.id))];
