@@ -31,7 +31,7 @@ Zentraler Dienst des Judo-Software-Verbunds für Anmeldung (SSO, JWKS), Verbands
 ## Conventions that differ from defaults
 
 - Bezeichner, Kommentare, Fehlermeldungen und Commit-Messages auf Deutsch.
-- Zielstruktur (AD-1): je Fachmodul `src/<modul>/` mit `routen.js`, `dienst.js`, `daten.js`, `tabellen.js`. Ein Modul liest fremde Tabellen nie direkt, sondern ruft den Dienst des anderen Moduls. Bis Story 1.1 umgesetzt ist, liegt der Altcode in `src/routes/`.
+- Zielstruktur (AD-1): je Fachmodul `src/module/<modul>/` mit `routen.js`, `dienst.js`, `daten.js`, `tabellen.js`. Ein Modul liest fremde Tabellen nie direkt, sondern ruft den Dienst des anderen Moduls. Altcode liegt in `src/routes/` und zieht mit der ersten Story um, die das Modul berührt; Pipeline und `ctx` in `src/pipeline/`, geprüft von `test/konformitaet.test.js`.
 - Dienstfunktionen haben die Form `fn(ctx, db, args)`; `ctx` = `{benutzer, kontext, rechte, anwendung, jetzt}`, Jobs nutzen `systemCtx(name)`. Nie `new Date()` im Dienst, sondern `ctx.jetzt`.
 - Rechte prüft `darf()` im Code, nicht die Datenbank. Kein Zugriff auf eine Person unter `/v2` liefert 404, nie 403.
 - Forderungen schreibt nur das Modul `finanzen` (`forderungErzeugen`, `forderungStornieren`, `forderungErstatten`, `forderungStatus`).

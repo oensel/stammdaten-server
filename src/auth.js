@@ -55,6 +55,10 @@ export async function ladeKontext(db, benutzer, vereinId, { ohneWahl = false } =
   };
 }
 
+/** Benutzerzeile, wie sie ladeKontext braucht. */
+export const ladeBenutzerFuerKontext = async (db, id) =>
+  (await db.query('select id, ist_super_admin, heimatverein_id from benutzer where id = $1', [id])).rows[0];
+
 /** Alle freigegebenen Zugehörigkeiten: Verein, Rolle, wirksame Rechte, Mitglied und Kinder. */
 async function ladeZugehoerigkeiten(db, benutzerId) {
   return (await db.query(
