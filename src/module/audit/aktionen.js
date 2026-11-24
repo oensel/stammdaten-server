@@ -8,7 +8,7 @@ export const AKTIONEN = Object.freeze([
   'startrecht_geaendert',
   'pruefung_korrigiert',
   'lehrgang_abgeschlossen', 'lehrgang_freigegeben', 'lehrgang_selbst_freigegeben',
-  'stellvertreter_ernannt', 'stellvertreter_entzogen',
+  'stellvertreter_ernannt', 'stellvertreter_entzogen', 'stellvertreter_abgewiesen',
   'lizenz_verlaengert',
   'bankdaten_notfallzugriff',
   'gebuehrenregel_geaendert', 'entscheidungsebene_geaendert',

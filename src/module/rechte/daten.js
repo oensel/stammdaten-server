@@ -23,4 +23,23 @@ export const rollentraeger = async (db, { verbandIds, rolle }) => (await db.quer
   'select distinct benutzer_id from benutzer_verbandsrollen where verband_id = any($1::uuid[]) and rolle = $2 and beendet_am is null', [verbandIds, rolle])).rows;
 
 export const verbandsrollen = async (db, benutzerId) => (await db.query(
-  'select rolle, verband_id from benutzer_verbandsrollen where benutzer_id = $1 and beendet_am is null', [benutzerId])).rows;
+  'select id, rolle, verband_id, stellvertreter_von from benutzer_verbandsrollen where benutzer_id = $1 and beendet_am is null', [benutzerId])).rows;
+
+export const rollenImVerband = async (db, verbandId) => (await db.query(
+  `select id, benutzer_id, rolle, stellvertreter_von, erstellt_am, grund from benutzer_verbandsrollen
+    where verband_id = $1 and beendet_am is null order by rolle, stellvertreter_von nulls first, erstellt_am`, [verbandId])).rows;
+
+export const rolleSperren = async (db, { id, verbandId }) => (await db.query(
+  'select * from benutzer_verbandsrollen where id = $1 and verband_id = $2 and beendet_am is null for update', [id, verbandId])).rows[0];
+
+export const rolleEinfuegen = async (db, r) => (await db.query(
+  `insert into benutzer_verbandsrollen (benutzer_id, verband_id, rolle, stellvertreter_von, erstellt_von, grund, erstellt_am)
+   values ($1,$2,$3,$4,$5,$6,$7) returning id, benutzer_id, verband_id, rolle, stellvertreter_von, grund`,
+  [r.benutzerId, r.verbandId, r.rolle, r.stellvertreterVon ?? null, r.von, r.grund ?? null, r.jetzt])).rows[0];
+
+export const stellvertreterAktiv = async (db, amtId) => (await db.query(
+  'select id, benutzer_id from benutzer_verbandsrollen where stellvertreter_von = $1 and beendet_am is null', [amtId])).rows;
+
+export const rolleBeenden = async (db, { id, von, grund, jetzt }) => (await db.query(
+  `update benutzer_verbandsrollen set beendet_am = $2, beendet_von = $3, grund = coalesce($4, grund) where id = $1
+   returning id, benutzer_id, verband_id, rolle, stellvertreter_von`, [id, jetzt, von, grund ?? null])).rows[0];
