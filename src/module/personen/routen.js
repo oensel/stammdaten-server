@@ -41,4 +41,15 @@ export default function routen(v2) {
     method: 'DELETE', url: '/personen/:id/zugriffe/:zugriff_id', schema: { params: objekt({ id: uuid, zugriff_id: uuid }, ['id', 'zugriff_id']) },
     handler: (ctx, db, { params }) => dienst.zugriffEntziehen(ctx, db, params),
   });
+  v2({ method: 'GET', url: '/personen/:id/dokumente', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.dokumenteLesen(ctx, db, params) });
+  v2({
+    method: 'GET', url: '/personen/:id/dokumente/:dokument_id', schema: { params: objekt({ id: uuid, dokument_id: uuid }, ['id', 'dokument_id']) },
+    handler: (ctx, db, { params }) => dienst.dokumentLesen(ctx, db, params),
+  });
+  // Datei roh im Body; kein Dateiname in der URL (NFR-1)
+  v2({
+    method: 'POST', url: '/personen/:id/dokumente', status: 201, bodyLimit: 10 * 1024 * 1024,
+    schema: { params: mitId, querystring: objekt({ art: { type: 'string', enum: ['passfoto', 'scan', 'bescheinigung', 'vormundschaftsnachweis'] } }, ['art']) },
+    handler: (ctx, db, { params, query: { art }, body }) => dienst.dokumentAblegen(ctx, db, { id: params.id, art, inhalt: body }),
+  });
 }

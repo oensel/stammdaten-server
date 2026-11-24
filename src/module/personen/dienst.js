@@ -168,3 +168,58 @@ export const zugriffEntziehen = (ctx, db, { id, zugriff_id, grund = null }) => s
   await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'personen_zugriff', objekt_id: zugriff_id, alt: ende, grund });
   return ende;
 });
+
+// ---- Dokumente der Person (FR-75) ----
+/** Erkennt den Inhalt, nicht den angegebenen Typ. */
+function dateityp(b) {
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { mime: 'image/jpeg', endung: 'jpg' };
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', endung: 'png' };
+  if (b.length > 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP') return { mime: 'image/webp', endung: 'webp' };
+  if (b.length > 5 && b.subarray(0, 5).toString('latin1') === '%PDF-') return { mime: 'application/pdf', endung: 'pdf' };
+  return null;
+}
+
+/**
+ * Positivliste: Heimatverein (im eigenen Kontext, mit vollem Änderungsrecht), Person, Benutzer mit Zugriff; alle anderen 404, auch
+ * der Super-Admin ohne Rolle dort. Das Passfoto sieht im Heimatverein jeder mit Leserecht. Der LV bei Judopass-Anträgen kommt mit diesen.
+ */
+async function dokumentRechte(ctx, db, person) {
+  if (!person) throw notFound();
+  const z = await zieleFuer(ctx, db, person);
+  const eigen = z.lesen.eigen && darf(ctx, 'mitglieder:LESEN', z.lesen);
+  const c = { ...ctx, rechte: { ...ctx.rechte, super_admin: false } };
+  const imHeimatverein = ctx.kontext?.art === 'verein' && ctx.kontext.id === person.heimatverein_id;
+  const ziel = { ...z.aendern, eigen_kontakt: false };
+  const verwalten = imHeimatverein && darfFelder(c, 'mitglieder:AENDERN', 'person', ['vorname', 'email'], ziel);
+  const r = {
+    alle: eigen || verwalten,
+    passfoto: eigen || verwalten || (imHeimatverein && darf(c, 'mitglieder:LESEN', { ...ziel, eigen: false })),
+    schreiben: verwalten || (z.selbst && eigen && mindestens(person, 14, heute(ctx))),
+  };
+  if (!r.passfoto) throw notFound();
+  return r;
+}
+const sichtbar = (r, d) => r.alle || (r.passfoto && d.art === 'passfoto');
+
+export async function dokumenteLesen(ctx, db, { id }) {
+  const r = await dokumentRechte(ctx, db, await daten.personLesen(db, id));
+  return { dokumente: (await daten.dokumenteVon(db, id)).filter((d) => sichtbar(r, d)) };
+}
+
+export async function dokumentLesen(ctx, db, { id, dokument_id }) {
+  const r = await dokumentRechte(ctx, db, await daten.personLesen(db, id));
+  const d = await daten.dokumentInhalt(db, { id: dokument_id, personId: id });
+  if (!d || !sichtbar(r, d)) throw notFound();
+  return { datei: { mime: d.mime_typ, name: d.dateiname, inhalt: d.inhalt } };
+}
+
+export const dokumentAblegen = (ctx, db, { id, art, inhalt }) => inTransaktion(db, async (c) => {
+  const person = await daten.personSperren(c, id); // hält parallele Passfotos derselben Person auseinander
+  const r = await dokumentRechte(ctx, c, person);
+  if (!r.schreiben) throw notFound();
+  if (!Buffer.isBuffer(inhalt) || !inhalt.length) throw badRequest('Datei als Body senden', 'datei_fehlt');
+  const typ = dateityp(inhalt);
+  if (!typ || (art === 'passfoto' && typ.endung === 'pdf')) throw badRequest('Nur JPEG, PNG, WebP oder PDF (Passfoto: nur Bild)', 'dateityp_ungueltig');
+  const d = { personId: id, vereinId: person.heimatverein_id, art, name: `${art}.${typ.endung}`, mime: typ.mime, inhalt, von: ctx.benutzer.id };
+  return (art === 'passfoto' && await daten.passfotoErsetzen(c, d)) || daten.dokumentAnlegen(c, d);
+});
