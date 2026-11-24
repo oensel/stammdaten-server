@@ -1,1 +1,1 @@
-export const tabellen = ['verbaende', 'vereine', 'verband_pfade'];
+export const tabellen = ['verbaende', 'vereine', 'verband_pfade', 'fristen'];

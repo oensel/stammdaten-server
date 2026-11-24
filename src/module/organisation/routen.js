@@ -30,4 +30,13 @@ export default function routen(v2) {
     schema: { params: mitId, body: { ...objekt({ ...verein, aufgeloest_am: { type: ['string', 'null'], format: 'date' } }), minProperties: 1 } },
     handler: (ctx, db, { params, body, version }) => dienst.vereinAendern(ctx, db, { id: params.id, version, aenderung: body }),
   });
+  v2({
+    method: 'GET', url: '/verbaende/:id/fristen', schema: { params: mitId },
+    handler: (ctx, db, { params }) => dienst.fristenLesen(ctx, db, { verband_id: params.id }),
+  });
+  v2({
+    method: 'PUT', url: '/verbaende/:id/fristen/:art',
+    schema: { params: objekt({ id: uuid, art: { type: 'string', maxLength: 60 } }, ['id', 'art']), body: objekt({ wert: { type: 'integer', minimum: 1, maximum: 1000 } }, ['wert']) },
+    handler: (ctx, db, { params, body }) => dienst.fristSetzen(ctx, db, { verband_id: params.id, art: params.art, wert: body.wert }),
+  });
 }
