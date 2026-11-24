@@ -1,5 +1,6 @@
 import { notFound } from '../../errors.js';
 import * as daten from './daten.js';
+import { BASISRECHTE, KATALOG, kennt } from './katalog.js';
 
 /** Aktive Verbandsrollen eines Benutzers; die Pipeline lädt sie einmal in ctx.rechte.verbandsrollen (ctx ist dann noch null). */
 export const ladeVerbandsrollen = (_ctx, db, { benutzer_id }) => daten.verbandsrollen(db, benutzer_id);
@@ -10,9 +11,7 @@ export const rollentraeger = (_ctx, db, { verband_ids, rolle }) => daten.rollent
 const istDjbAdmin = (ctx) => ctx.rechte.super_admin || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'djb_admin');
 
 const REGELN = {
-  'verbandsbaum:LESEN': (ctx) => ctx.benutzer !== null,
   'verbandsbaum:AENDERN': istDjbAdmin,
-  'fristen:LESEN': (ctx) => ctx.benutzer !== null,
   // ziel = { verband_id }: DJB-Admins überall, LV-Admins im eigenen Landesverband
   'fristen:AENDERN': (ctx, { verband_id }) =>
     istDjbAdmin(ctx) || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'lv_admin' && r.verband_id === verband_id),
@@ -20,11 +19,18 @@ const REGELN = {
 
 /** Einzige Rechteentscheidung (AD-3). Ein unbekanntes Recht ist ein Programmierfehler. Ausbau in Epic 2. */
 export function darf(ctx, recht, ziel) {
-  if (!Object.hasOwn(REGELN, recht)) throw new Error(`Unbekanntes Recht: ${recht}`);
-  return REGELN[recht](ctx, ziel);
+  if (!kennt(recht)) throw new Error(`Unbekanntes Recht: ${recht}`);
+  if (ctx.benutzer !== null && BASISRECHTE.includes(recht)) return true;
+  return Object.hasOwn(REGELN, recht) && REGELN[recht](ctx, ziel);
 }
 
 /** Wirft 404 (nie 403), wenn darf() nein sagt. */
 export function verlange(ctx, recht, ziel) {
   if (!darf(ctx, recht, ziel)) throw notFound();
+}
+
+/** Katalog der Rechte mit Operationen und Systemrollen (Super-Admin, Verbandsrollen, Vereins-Admins). */
+export async function katalogLesen(ctx, db) {
+  if (!ctx.rechte.super_admin && !ctx.rechte.verbandsrollen.length && ctx.rechte.rolle !== 'admin') throw notFound();
+  return { rechte: KATALOG, rollen: await daten.systemrollen(db) };
 }
