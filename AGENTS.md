@@ -27,6 +27,7 @@ Zentraler Dienst des Judo-Software-Verbunds für Anmeldung (SSO, JWKS), Verbands
 - Die Suite dauert ca. 1 Minute; beim Iterieren einzelne Dateien laufen lassen: `npx vitest run test/<datei>.test.js`.
 - Dev-Server: zuerst `npm run db` (Port 5440, läuft im Vordergrund), einmalig `npm run db:setup`, dann `npm start` (Port 4000).
 - Eine Story ist erst fertig, wenn `npm test` vollständig grün ist; CI (`.github/workflows/ci.yml`) prüft zusätzlich, dass keine `.env`-, Dump- oder Abzugsdateien getrackt sind.
+- `test/vertrag.test.js` hält Form und Claims von `/v1`, `/auth`, `/oauth/token`, `/ich` fest (`test/vertrag/form.json`, aufgezeichnet vor Story 1.2). `form.json` nie ändern, um einen Test grün zu bekommen.
 
 ## Conventions that differ from defaults
 

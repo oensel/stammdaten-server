@@ -1,0 +1,910 @@
+{
+ "POST /auth/login admin1": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token admin1": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": [
+    "text"
+   ],
+   "azp": "text",
+   "exp": "zahl",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "uuid",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "GET /ich admin1": {
+  "status": 200,
+  "form": {
+   "aktiv": {
+    "aud": "text",
+    "geraet_id": "null",
+    "mitglied_id": "uuid",
+    "mitglied_ids": [
+     "uuid"
+    ],
+    "rechte": [],
+    "rolle": "text",
+    "scope": [
+     "text"
+    ],
+    "verein_id": "uuid"
+   },
+   "benutzername": "text",
+   "email": "null",
+   "email_bestaetigt": "boolean",
+   "heimatverein_id": "null",
+   "id": "uuid",
+   "muss_passwort_aendern": "boolean",
+   "nachname": "text",
+   "pin_gesetzt": "boolean",
+   "super_admin": "boolean",
+   "totp_aktiv": "boolean",
+   "vereine": [
+    {
+     "id": "uuid",
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text",
+     "scope": [
+      "text"
+     ]
+    }
+   ],
+   "vorname": "text"
+  }
+ },
+ "POST /auth/login trainer1": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [
+       "text"
+      ],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token trainer1": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": [
+    "text"
+   ],
+   "azp": "text",
+   "exp": "zahl",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "uuid",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [
+    "text"
+   ],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [
+      "text"
+     ],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "GET /ich trainer1": {
+  "status": 200,
+  "form": {
+   "aktiv": {
+    "aud": "text",
+    "geraet_id": "null",
+    "mitglied_id": "uuid",
+    "mitglied_ids": [
+     "uuid"
+    ],
+    "rechte": [
+     "text"
+    ],
+    "rolle": "text",
+    "scope": [
+     "text"
+    ],
+    "verein_id": "uuid"
+   },
+   "benutzername": "text",
+   "email": "null",
+   "email_bestaetigt": "boolean",
+   "heimatverein_id": "null",
+   "id": "uuid",
+   "muss_passwort_aendern": "boolean",
+   "nachname": "text",
+   "pin_gesetzt": "boolean",
+   "super_admin": "boolean",
+   "totp_aktiv": "boolean",
+   "vereine": [
+    {
+     "id": "uuid",
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [
+      "text"
+     ],
+     "rolle": "text",
+     "scope": [
+      "text"
+     ]
+    }
+   ],
+   "vorname": "text"
+  }
+ },
+ "POST /auth/login schueler1": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token schueler1": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": [
+    "text"
+   ],
+   "azp": "text",
+   "exp": "zahl",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "uuid",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "GET /ich schueler1": {
+  "status": 200,
+  "form": {
+   "aktiv": {
+    "aud": "text",
+    "geraet_id": "null",
+    "mitglied_id": "uuid",
+    "mitglied_ids": [
+     "uuid"
+    ],
+    "rechte": [],
+    "rolle": "text",
+    "scope": [
+     "text"
+    ],
+    "verein_id": "uuid"
+   },
+   "benutzername": "text",
+   "email": "null",
+   "email_bestaetigt": "boolean",
+   "heimatverein_id": "null",
+   "id": "uuid",
+   "muss_passwort_aendern": "boolean",
+   "nachname": "text",
+   "pin_gesetzt": "boolean",
+   "super_admin": "boolean",
+   "totp_aktiv": "boolean",
+   "vereine": [
+    {
+     "id": "uuid",
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text",
+     "scope": [
+      "text"
+     ]
+    }
+   ],
+   "vorname": "text"
+  }
+ },
+ "POST /auth/login eltern1": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "null",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token eltern1": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": [
+    "text"
+   ],
+   "azp": "text",
+   "exp": "zahl",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "null",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "null",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "GET /ich eltern1": {
+  "status": 200,
+  "form": {
+   "aktiv": {
+    "aud": "text",
+    "geraet_id": "null",
+    "mitglied_id": "null",
+    "mitglied_ids": [
+     "uuid"
+    ],
+    "rechte": [],
+    "rolle": "text",
+    "scope": [
+     "text"
+    ],
+    "verein_id": "uuid"
+   },
+   "benutzername": "text",
+   "email": "null",
+   "email_bestaetigt": "boolean",
+   "heimatverein_id": "null",
+   "id": "uuid",
+   "muss_passwort_aendern": "boolean",
+   "nachname": "text",
+   "pin_gesetzt": "boolean",
+   "super_admin": "boolean",
+   "totp_aktiv": "boolean",
+   "vereine": [
+    {
+     "id": "uuid",
+     "mitglied_id": "null",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text",
+     "scope": [
+      "text"
+     ]
+    }
+   ],
+   "vorname": "text"
+  }
+ },
+ "POST /oauth/token refresh_token": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token nach Refresh": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": [
+    "text"
+   ],
+   "azp": "text",
+   "exp": "zahl",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "uuid",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "GET /mitglieder": {
+  "status": 200,
+  "form": {
+   "anzahl": "zahl",
+   "mitglieder": [
+    {
+     "geburtsdatum": "datum",
+     "geschlecht": "null",
+     "id": "uuid",
+     "mitgliedsnr": "zahl",
+     "nachname": "text",
+     "nationalitaet": "null",
+     "status": "text",
+     "vorname": "text"
+    }
+   ]
+  }
+ },
+ "GET /mitglieder/:id": {
+  "status": 200,
+  "form": {
+   "geburtsdatum": "datum",
+   "geschlecht": "null",
+   "graduierungen": [],
+   "id": "uuid",
+   "mitgliedsnr": "zahl",
+   "nachname": "text",
+   "nationalitaet": "null",
+   "status": "text",
+   "vorname": "text"
+  }
+ },
+ "POST /auth/verein-wechseln": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "POST /auth/login Gerät": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "geraet_id": "uuid",
+   "muss_passwort_aendern": "boolean",
+   "refresh_token": "text",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Access-Token Gerät": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": "text",
+   "azp": "text",
+   "exp": "zahl",
+   "geraet_id": "uuid",
+   "heimatverein_id": "uuid",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "mitglied_id": "uuid",
+   "mitglied_ids": [
+    "uuid"
+   ],
+   "rechte": [],
+   "rolle": "text",
+   "scope": "text",
+   "sid": "uuid",
+   "sub": "uuid",
+   "super_admin": "boolean",
+   "verein_id": "uuid",
+   "vereine": {
+    "*": {
+     "apps": {
+      "kyu-manager-pro": "text"
+     },
+     "mitglied_id": "uuid",
+     "mitglied_ids": [
+      "uuid"
+     ],
+     "name": "text",
+     "rechte": [],
+     "rolle": "text"
+    }
+   }
+  }
+ },
+ "POST /oauth/token client_credentials": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "expires_in": "zahl",
+   "scope": "text",
+   "token_type": "text"
+  }
+ },
+ "Client-Token": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": "text",
+   "client": "boolean",
+   "exp": "zahl",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "lizenz_arten": [
+    "text"
+   ],
+   "scope": "text",
+   "sub": "text"
+  }
+ },
+ "POST /v1/graduierungen": {
+  "status": 201,
+  "form": {
+   "art": "text",
+   "datum": "datum",
+   "id": "uuid",
+   "mitglied_id": "uuid",
+   "quelle": "text",
+   "stufe": "zahl"
+  }
+ },
+ "GET /v1/abgleich": {
+  "status": 200,
+  "form": {
+   "graduierungen": [
+    {
+     "art": "text",
+     "datum": "datum",
+     "geloescht_am": "null",
+     "id": "uuid",
+     "mitglied_id": "uuid",
+     "quelle": "text",
+     "stufe": "zahl",
+     "urkunden_nr": "null"
+    }
+   ],
+   "gruppen": [],
+   "lizenzen": [
+    {
+     "art": "text",
+     "geloescht_am": "null",
+     "gueltig_bis": "null",
+     "id": "uuid",
+     "mitglied_id": "uuid",
+     "nummer": "text"
+    }
+   ],
+   "mehr": "boolean",
+   "mitglied_gruppen": [],
+   "mitglieder": [
+    {
+     "anonymisiert_am": "null",
+     "geburtsdatum": "datum",
+     "geloescht_am": "null",
+     "id": "uuid",
+     "mitgliedsnr": "zahl",
+     "nachname": "text",
+     "status": "text",
+     "vorname": "text"
+    }
+   ],
+   "stand": "text"
+  }
+ },
+ "GET /v1/anwendungen": {
+  "status": 200,
+  "form": [
+   {
+    "icon": "null",
+    "name": "text",
+    "schluessel": "text",
+    "url": "text"
+   }
+  ]
+ },
+ "Fehler 401": {
+  "status": 401,
+  "form": {
+   "code": "text",
+   "detail": "text",
+   "status": "zahl",
+   "title": "text",
+   "type": "text"
+  }
+ },
+ "Fehler 403": {
+  "status": 403,
+  "form": {
+   "code": "text",
+   "detail": "text",
+   "status": "zahl",
+   "title": "text",
+   "type": "text"
+  }
+ },
+ "POST /auth/login web": {
+  "status": 200,
+  "form": {
+   "access_token": "text",
+   "benutzer": {
+    "aktiver_verein_id": "uuid",
+    "benutzername": "text",
+    "email": "null",
+    "heimatverein_id": "null",
+    "id": "uuid",
+    "nachname": "text",
+    "super_admin": "boolean",
+    "vereine": [
+     {
+      "id": "uuid",
+      "mitglied_id": "uuid",
+      "mitglied_ids": [
+       "uuid"
+      ],
+      "name": "text",
+      "rechte": [],
+      "rolle": "text",
+      "scope": [
+       "text"
+      ]
+     }
+    ],
+    "vorname": "text"
+   },
+   "expires_in": "zahl",
+   "muss_passwort_aendern": "boolean",
+   "scope": "text",
+   "token_type": "text",
+   "verein_id": "uuid"
+  }
+ },
+ "Logout-Token": {
+  "kopf": {
+   "alg": "text",
+   "kid": "text",
+   "typ": "text"
+  },
+  "claims": {
+   "aud": "text",
+   "events": {
+    "http://schemas.openid.net/event/backchannel-logout": {}
+   },
+   "exp": "zahl",
+   "iat": "zahl",
+   "iss": "text",
+   "jti": "uuid",
+   "sid": "uuid",
+   "sub": "uuid"
+  }
+ }
+}
