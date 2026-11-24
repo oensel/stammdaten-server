@@ -27,3 +27,20 @@ export const mitgliedschaften = async (db, personId) => (await db.query(
 export const kontaktAendern = (db, p) => eine(db,
   `update personen set strasse = $2, plz = $3, ort = $4, land = $5, email = $6, telefon = $7, geaendert_von = $8 where id = $1 returning ${PERSON}`,
   [p.id, p.strasse, p.plz, p.ort, p.land, p.email, p.telefon, p.von]);
+
+// ---- Zugriffe ----
+const ZUGRIFF = 'id, person_id, benutzer_id, art, umfang, erteilt_von, erteilt_am, freigeschaltet_bis, widerrufen_am';
+export const zugriffFuer = (db, { personId, benutzerId }) => eine(db,
+  `select ${ZUGRIFF} from personen_zugriffe where person_id = $1 and benutzer_id = $2 and widerrufen_am is null`, [personId, benutzerId]);
+export const zugriffeVon = async (db, personId) => (await db.query(
+  `select ${ZUGRIFF} from personen_zugriffe where person_id = $1 and widerrufen_am is null order by erteilt_am, id`, [personId])).rows;
+export const zugriffSperren = (db, { id, personId }) => eine(db,
+  `select ${ZUGRIFF} from personen_zugriffe where id = $1 and person_id = $2 and widerrufen_am is null for update`, [id, personId]);
+export const zugriffAnlegen = (db, z) => eine(db,
+  `insert into personen_zugriffe (person_id, benutzer_id, art, umfang, freigeschaltet_bis, erteilt_von, erteilt_am) values ($1,$2,$3,$4,$5,$6,$7) returning ${ZUGRIFF}`,
+  [z.personId, z.benutzerId, z.art, z.umfang, z.bis, z.von, z.jetzt]);
+export const zugriffBeenden = (db, { id, von, jetzt }) => eine(db,
+  `update personen_zugriffe set widerrufen_am = $3, widerrufen_von = $2 where id = $1 returning ${ZUGRIFF}`, [id, von, jetzt]);
+export const personenFuerBenutzer = async (db, benutzerId) => (await db.query(
+  `select ${PERSON} from personen where benutzer_id = $1
+      or id in (select person_id from personen_zugriffe where benutzer_id = $1 and widerrufen_am is null) order by lower(nachname), lower(vorname), id`, [benutzerId])).rows;

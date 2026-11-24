@@ -100,8 +100,8 @@ it('Bestand: Migration 025 legt je Mitglied eine Person an und lässt change_xid
   try {
     await c.query('begin');
     await c.query(`drop trigger mitglied_person on mitglieder; drop trigger mitglied_an_person on mitglieder; drop table aufgaben;
-      alter table personen drop constraint person_braucht_mitgliedschaft; alter table mitglieder drop column person_id; drop table personen;
-      drop function mitglied_person, mitglied_an_person, person_an_mitglieder`);
+      alter table personen drop constraint person_braucht_mitgliedschaft; alter table mitglieder drop column person_id cascade; drop table personen cascade;
+      drop function if exists mitglied_person, mitglied_an_person, person_an_mitglieder`);
     const vorher = (await c.query(bild)).rows;
     expect(vorher.length).toBeGreaterThan(0);
     await c.query(await readFile('db/migrations/025_personen.sql', 'utf8'));
