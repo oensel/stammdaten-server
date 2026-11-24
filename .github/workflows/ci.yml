@@ -125,6 +125,20 @@ jobs:
           tail -n 1 "$SICHERUNG_VERZEICHNIS/restore-probe.log" | grep -qF 'ergebnis=nicht_bestanden(alter>24h)'
           rm "$alt"
           if WIEDERHERSTELLUNG_DB=stammdaten scripts/wiederherstellung.sh; then echo "Produktiv-DB als Ziel nicht abgewiesen"; exit 1; fi
+      - name: Ernstfall-Restore in frischen Cluster, Abgleich beginnt neu
+        run: |
+          neu=$(ls -1 "$SICHERUNG_VERZEICHNIS"/stammdaten-*.dump.age | sort | tail -n 1)
+          docker run -d --name frisch -e POSTGRES_USER=stammdaten -e POSTGRES_DB=stammdaten -e POSTGRES_PASSWORD="$DB_PASSWORD" postgres:18
+          for i in $(seq 1 30); do docker exec frisch psql -h 127.0.0.1 -U stammdaten -d stammdaten -c 'select 1' > /dev/null 2>&1 && break; sleep 1; done
+          age -d -i "$WIEDERHERSTELLUNG_SCHLUESSEL" "$neu" | docker exec -i frisch pg_restore -U stammdaten -d stammdaten --no-owner --exit-on-error
+          frage() { docker exec frisch psql -U stammdaten -d stammdaten -At -c "$1"; }
+          # Bestand aus einem weit fortgeschrittenen Cluster nachstellen
+          frage "set session_replication_role = replica; update mitglieder set change_xid = '900000000'::xid8" > /dev/null
+          test "$(frage 'select count(*) from mitglieder where change_xid < pg_snapshot_xmin(pg_current_snapshot())')" = 0
+          test "$(frage 'select abgleich_neu_beginnen()')" = 1
+          test "$(frage 'select count(*) from mitglieder where change_xid >= pg_snapshot_xmin(pg_current_snapshot())')" = 0
+          test "$(frage 'select count(*) from mitglieder')" -gt 0
+          docker rm -f frisch
       - name: Worker endet auf SIGTERM mit 0
         run: |
           docker compose stop -t 20 worker

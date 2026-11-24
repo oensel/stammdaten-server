@@ -48,3 +48,6 @@ export const vereinsAdmins = async (db, vereinId) => (await db.query(
 export const benutzerName = (db, id) => eine(db, 'select benutzername, vorname, nachname from benutzer where id = $1', [id]);
 export const benutzerAnlegen = (db, b) => eine(db,
   'insert into benutzer (benutzername, vorname, nachname, passwort_hash) values ($1,$2,$3,$4) returning id', [b.benutzername, b.vorname, b.nachname, b.hash]);
+
+export const einladungenVerbrauchen = (db, { benutzerId, vereinId, jetzt }) => db.query(
+  `update einmal_tokens set benutzt_am = $3 where benutzer_id = $1 and verein_id = $2 and zweck = 'einladung' and benutzt_am is null`, [benutzerId, vereinId, jetzt]);

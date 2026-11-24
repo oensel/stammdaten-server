@@ -74,6 +74,9 @@ export async function ladeVerbandskontext(db, benutzer, verbandId) {
   return { verein_id: null, verband_id: verbandId, verbandsrollen: rollen, rolle: null, rechte: [], mitglied_id: null, mitglied_ids: [], super_admin: benutzer.ist_super_admin };
 }
 
+/** Hat der Benutzer eine aktive Verbandsrolle? Solche Konten darf ein Verein nicht zurücksetzen. */
+export const hatVerbandsrolle = async (db, id) => (await ladeVerbandsrollen(null, db, { benutzer_id: id })).length > 0;
+
 /** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
 export const ladeMailAdresse = async (db, id) =>
   (await db.query('select email from benutzer where id = $1 and aktiv and geloescht_am is null', [id])).rows[0]?.email || null;
@@ -219,6 +222,10 @@ export async function rotiere(app, refreshToken, { clientId = null, vereinId = n
     if (!anw) throw unauthorized('Unbekannte oder deaktivierte Anwendung', 'unbekannte_anwendung');
   }
 
+  if (rt.geraet_id && vereinId && vereinId.toLowerCase() !== rt.verein_id) {
+    throw fehler(400, 'Geräte-Anmeldungen sind an einen Verein gebunden – am Gerät neu anmelden', 'geraet_gebunden');
+  }
+
   if (rt.widerrufen_am) {
     if (rt.ersetzt_durch) {
       const sek = (Date.now() - new Date(rt.widerrufen_am).getTime()) / 1000;
@@ -240,8 +247,8 @@ export async function rotiere(app, refreshToken, { clientId = null, vereinId = n
   };
   if (!benutzer) throw await beenden('Konto nicht mehr aktiv', 'konto_inaktiv');
   if (rt.geraet_id) {
-    const g = (await pool.query('select gesperrt from geraete where id = $1', [rt.geraet_id])).rows[0];
-    if (!g || g.gesperrt) { await widerrufeFamilie(pool, rt.familie_id); throw unauthorized('Gerät gesperrt', 'geraet_gesperrt'); }
+    const g = (await pool.query('select gesperrt, verein_id from geraete where id = $1', [rt.geraet_id])).rows[0];
+    if (!g || g.gesperrt || g.verein_id !== rt.verein_id) { await widerrufeFamilie(pool, rt.familie_id); throw unauthorized('Gerät gesperrt', 'geraet_gesperrt'); }
   }
   let kontext;
   const ohneWahl = !rt.geraet_id; // Web: kein Pflicht-Verein, die App wählt aus dem Token

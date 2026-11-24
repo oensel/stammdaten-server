@@ -38,7 +38,10 @@ async function ladeCtx(app, req) {
     if (!verbandsrollen.length) throw notFound();
     const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
     const quellen = await ladeQuellen(null, app.pool, { kontext, verbandsrollen });
-    return baueCtx({ ...basis, kontext, rechte: { quellen, verbandsrollen, super_admin: benutzer.ist_super_admin } });
+    return baueCtx({ ...basis, kontext, rechte: {
+      quellen, verbandsrollen, super_admin: benutzer.ist_super_admin,
+      scopes: benutzer.ist_super_admin ? wirksameScopes({ superAdmin: true }, anwendung.scopes) : [],
+    } });
   }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;

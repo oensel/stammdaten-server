@@ -6,8 +6,9 @@ export const alleVerbaende = async (db) => (await db.query(`select ${VERBAND} fr
 export const alleVereine = async (db) => (await db.query(
   `select ${VEREIN} from vereine where geloescht_am is null and registrierung_status = 'freigegeben' order by lower(name)`)).rows;
 
-export const verbandSperren = (db, id) => eine(db, `select ${VERBAND} from verbaende where id = $1 and geloescht_am is null for update`, [id]);
-export const vereinSperren = (db, id) => eine(db, `select ${VEREIN} from vereine where id = $1 and geloescht_am is null for update`, [id]);
+// no key update: verträgt sich mit den Fremdschlüsselprüfungen der verband_pfade-Trigger (sonst Deadlock)
+export const verbandSperren = (db, id) => eine(db, `select ${VERBAND} from verbaende where id = $1 and geloescht_am is null for no key update`, [id]);
+export const vereinSperren = (db, id) => eine(db, `select ${VEREIN} from vereine where id = $1 and geloescht_am is null for no key update`, [id]);
 
 export const verbandAnlegen = (db, v) => eine(db,
   `insert into verbaende (name, kurzname, typ, uebergeordnet_id, geaendert_von) values ($1,$2,$3,$4,$5) returning ${VERBAND}`,

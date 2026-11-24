@@ -99,6 +99,8 @@ export async function zugehoerigkeitEntscheiden(ctx, db, { verein_id, id, versio
     // Freigabe gibt immer nur Mitglied; weitere Rechte vergibt der Admin danach ausdrücklich
     await beendeDirektrechte(ctx, c, { benutzer_id: alt.benutzer_id, verein_id });
     const neu = await daten.entscheiden(c, { id, status, rolle: 'mitglied', von: ctx.benutzer.id, jetzt: ctx.jetzt });
+    // Eine ältere Einladung darf die Entscheidung nicht wieder aufheben; eine spätere ist ein neuer Entschluss des Vereins
+    if (status !== 'freigegeben') await daten.einladungenVerbrauchen(c, { benutzerId: alt.benutzer_id, vereinId: verein_id, jetzt: ctx.jetzt });
     const bild = ({ rolle, status: s }) => ({ benutzer_id: alt.benutzer_id, verein_id, rolle, status: s });
     await audit.schreiben(ctx, c, { aktion, objekt_art: 'vereinszugehoerigkeit', objekt_id: id, alt: bild(alt), neu: bild(neu), grund });
     return neu;

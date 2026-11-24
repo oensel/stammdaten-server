@@ -3,13 +3,13 @@
 //   POST /auth/passwort-zuruecksetzen  { token, passwort_neu }
 //   POST /auth/email-bestaetigen       { token }
 //   POST /einladungen                  { email, rolle?, rechte?, mitglied_id? }   Admin (benutzer:verwalten)
-//   POST /auth/einladung-annehmen      { token, benutzername?, passwort_neu? }
+//   POST /auth/einladung-annehmen      { token, benutzername?, passwort_neu?, passwort? }
 import { randomUUID } from 'node:crypto';
 import { tx } from '../db.js';
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../errors.js';
 import { pruefeBearer, widerrufeAlle } from '../auth.js';
 import { erzeugeEinmalToken, liesEinmalToken, link, verbrauche } from '../einmal.js';
-import { PW_MAX, hashSecret, pruefeNeuesPasswort } from '../passwords.js';
+import { PW_MAX, hashSecret, pruefeNeuesPasswort, verifySecret } from '../passwords.js';
 
 const UNGUELTIG = 'Link ungültig oder abgelaufen';
 const tokenBody = { type: 'string', minLength: 10, maxLength: 200 };
@@ -122,15 +122,24 @@ export default async function einmalRoutes(app) {
           token: tokenBody,
           benutzername: { type: 'string', minLength: 3, maxLength: 60, pattern: '^[A-Za-z0-9._-]+$' },
           passwort_neu: { type: 'string', maxLength: PW_MAX },
+          passwort: { type: 'string', maxLength: PW_MAX },
         },
       },
     },
   }, async (req) => {
     const t = await liesEinmalToken(pool, req.body.token, 'einladung');
     if (!t) throw unauthorized(UNGUELTIG, 'link_ungueltig');
-    const u = (await pool.query('select id, passwort_hash from benutzer where id = $1 and aktiv and geloescht_am is null', [t.benutzer_id])).rows[0];
+    const u = (await pool.query('select id, passwort_hash, email, email_bestaetigt_am from benutzer where id = $1 and aktiv and geloescht_am is null', [t.benutzer_id])).rows[0];
     if (!u) throw unauthorized(UNGUELTIG, 'link_ungueltig');
-    const neu = !u.passwort_hash; // neues Konto → Benutzername + Passwort festlegen
+    // Das Konto führt die eingeladene Adresse, hat sie aber nie bewiesen: Es könnte jemand anderem gehören. Entweder weist sich die
+    // Person mit dem Passwort dieses Kontos aus, oder sie legt ein eigenes an und die (per Link bewiesene) Adresse zieht dorthin um.
+    let umzug = false;
+    if (u.passwort_hash && !u.email_bestaetigt_am) {
+      if (req.body.passwort) {
+        if (!(await verifySecret(u.passwort_hash, req.body.passwort))) throw unauthorized('Passwort falsch', 'passwort_falsch');
+      } else umzug = true;
+    }
+    const neu = !u.passwort_hash || umzug; // neues Konto → Benutzername + Passwort festlegen
     let hash = null;
     if (neu) {
       if (!req.body.benutzername || !req.body.passwort_neu) throw badRequest('benutzername und passwort_neu angeben', 'angaben_fehlen');
@@ -139,7 +148,15 @@ export default async function einmalRoutes(app) {
     }
     try {
       await tx(pool, async (db) => {
+        // erst die Zugehörigkeit, dann den Link sperren: gleiche Reihenfolge wie beim Entzug (zugang), der offene Einladungen verbraucht
+        await db.query('select 1 from benutzer_vereine where benutzer_id = $1 and verein_id = $2 for update', [u.id, t.verein_id]);
         if (!(await verbrauche(db, t.id))) throw unauthorized(UNGUELTIG, 'link_ungueltig');
+        if (umzug) {
+          // nur, wenn das alte Konto die Adresse noch unbestätigt führt
+          const frei = await db.query('update benutzer set email = null where id = $1 and email = $2 and email_bestaetigt_am is null', [u.id, u.email]);
+          if (!frei.rowCount) throw unauthorized(UNGUELTIG, 'link_ungueltig');
+          u.id = (await db.query('insert into benutzer (benutzername, email) values ($1,$2) returning id', [`einladung-${randomUUID().slice(0, 8)}`, u.email])).rows[0].id;
+        }
         if (neu) {
           await db.query(
             `update benutzer set benutzername = $2, passwort_hash = $3, email_bestaetigt_am = now(), passwort_geaendert_am = now(), geaendert_am = now() where id = $1`,

@@ -95,6 +95,8 @@ export default async function ichRoutes(app) {
       await tx(pool, async (db) => {
         werte.push(u.id);
         await db.query(`update benutzer set ${sets.join(', ')}, geaendert_am = now(), geaendert_von = $${werte.length} where id = $${werte.length}`, werte);
+        // Links an die alte Adresse dürfen die neue nie bestätigen
+        if (sets.includes('email_bestaetigt_am = null')) await db.query('update einmal_tokens set benutzt_am = now() where benutzer_id = $1 and benutzt_am is null', [u.id]);
         // andere Anmeldungen (andere Geräte) enden bei Passwortwechsel; die aktuelle (sid) bleibt
         if (passwortGeaendert) await widerrufeAlle(db, u.id, claims.sid);
       });
