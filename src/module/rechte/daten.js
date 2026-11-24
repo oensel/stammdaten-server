@@ -3,8 +3,9 @@ export const direktrechteBeenden = (db, { benutzerId, vereinId, von, jetzt }) =>
   [benutzerId, vereinId, jetzt, von]);
 
 export const rollenMitRechten = async (db, schluessel) => (await db.query(
-  `select r.schluessel, coalesce(array_agg(b.recht || ':' || b.operation) filter (where b.recht is not null), '{}') as rechte
-     from rollen r left join rollen_berechtigungen b on b.rolle_id = r.id
+  `select r.schluessel, coalesce(array_agg(b.recht || ':' || b.operation) filter (where b.recht is not null), '{}') as rechte,
+          coalesce(jsonb_object_agg(b.recht || ':' || b.operation, to_jsonb(f)) filter (where f.id is not null), '{}') as filter
+     from rollen r left join rollen_berechtigungen b on b.rolle_id = r.id left join datenfilter f on f.id = b.datenfilter_id
     where r.verein_id is null and r.schluessel = any($1) group by r.id order by r.schluessel`, [schluessel])).rows;
 
 /** 1 = Dachverband … 4 = Kreis */
