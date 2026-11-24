@@ -77,7 +77,9 @@ export async function qrCodeAnlegen(ctx, db, { verein_id, gueltig_tage = 90 }) {
   return inTransaktion(db, async (c) => {
     const token = neuesToken();
     const ablauf = new Date(ctx.jetzt.getTime() + gueltig_tage * 86_400_000);
-    const qr = await daten.qrAnlegen(c, { vereinId: verein_id, hash: sha256(token), von: ctx.benutzer.id, jetzt: ctx.jetzt, ablauf });
+    const qr = await daten.qrAnlegen(c, { vereinId: verein_id, hash: sha256(token), von: ctx.benutzer.id, jetzt: ctx.jetzt, ablauf }).catch((e) => {
+      throw e.constraint === 'qr_verein_aufgeloest' ? conflict('Der Verein ist aufgelöst', 'verein_aufgeloest') : e;
+    });
     return { ...qr, token }; // nur hier im Klartext; den QR-Code zeichnet die Oberfläche
   });
 }
@@ -177,7 +179,7 @@ export async function totpBestaetigen(ctx, db, { id, eingabe, entschluesseln }) 
   if (schritt === null) return null;
   const codes = neueBackupCodes();
   await inTransaktion(db, async (c) => {
-    await daten.totpAktivieren(c, { id, schritt, jetzt: ctx.jetzt });
+    if (!await daten.totpAktivieren(c, { id, schritt, wert: roh, jetzt: ctx.jetzt })) throw conflict('Die Einrichtung wurde inzwischen geändert', 'zweiter_faktor_vorhanden');
     await daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) });
   });
   return codes;
