@@ -1,7 +1,8 @@
 import { inTransaktion } from '../../db.js';
 import { fehler, notFound } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
-import { verlange } from '../rechte/dienst.js';
+import * as benachrichtigung from '../benachrichtigung/dienst.js';
+import { rollentraeger, verlange } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 // DB-Invariante → fachlicher Fehler (AD-4)
@@ -63,16 +64,30 @@ export function vereinAnlegen(ctx, db, { name, kurzname = null, vereinsnummer = 
   });
 }
 
+/** FR-2: beide Landesverbände erfahren vom Wechsel; innerhalb eines Landesverbands niemand. */
+async function meldeVerbandswechsel(ctx, c, verein, altLv) {
+  const neuLv = await daten.landesverbandVon(c, verein.id);
+  if (altLv?.id === neuLv?.id) return;
+  const lvs = [altLv, neuLv].filter(Boolean);
+  const empfaenger = await rollentraeger(ctx, c, { verband_ids: lvs.map((v) => v.id), rolle: 'lv_admin' });
+  await benachrichtigung.senden(ctx, c, {
+    empfaenger, art: 'verein_verbandswechsel', daten: { verein: verein.name, alt: altLv?.name ?? 'ohne Verband', neu: neuLv.name },
+  });
+}
+
 export function vereinAendern(ctx, db, { id, version, aenderung }) {
   verlange(ctx, 'verbandsbaum:AENDERN');
   return schreibe(db, async (c) => {
     const alt = await daten.vereinSperren(c, id);
     pruefeVersion(alt, version);
+    const altLv = await daten.landesverbandVon(c, id);
     const neu = await daten.vereinAendern(c, { ...alt, ...aenderung, id, geaendert_von: ctx.benutzer?.id });
-    await audit.schreiben(ctx, c, { aktion: 'verein_geaendert', objekt_art: 'verein', objekt_id: id, alt: ohneVersion(alt), neu: ohneVersion(neu) });
+    const wechsel = alt.verband_id !== neu.verband_id;
+    await audit.schreiben(ctx, c, { aktion: wechsel ? 'verein_verbandswechsel' : 'verein_geaendert', objekt_art: 'verein', objekt_id: id, alt: ohneVersion(alt), neu: ohneVersion(neu) });
+    if (wechsel) await meldeVerbandswechsel(ctx, c, neu, altLv);
     return neu;
   });
 }
 
 /** Liegt ein Verband oder Verein unter (oder gleich) einem Verband? */
-export const liegtUnter = (ctx, db, { nachfahr_id, vorfahr_id }) => daten.pfadVorhanden(db, vorfahr_id, nachfahr_id);
+export const liegtUnter = (_ctx, db, { nachfahr_id, vorfahr_id }) => daten.pfadVorhanden(db, vorfahr_id, nachfahr_id);

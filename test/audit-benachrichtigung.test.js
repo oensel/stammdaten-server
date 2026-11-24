@@ -12,6 +12,7 @@ let t; let benutzer; let verein;
 beforeAll(async () => {
   t = await neueApp();
   benutzer = (await t.pool.query('select id from benutzer limit 1')).rows[0].id;
+  await t.pool.query(`update benutzer set email = 'a@example.org' where id = $1`, [benutzer]);
   verein = (await t.pool.query('select id from vereine limit 1')).rows[0].id;
 });
 afterAll(() => t.schliessen());
@@ -43,20 +44,19 @@ describe('audit', () => {
   });
 });
 
-const anlegen = (jetzt = JETZT, email = 'a@example.org') => tx(t.pool, (db) => benachrichtigung.senden(systemCtx('probe', { jetzt }), db,
-  { empfaenger: [{ benutzer_id: benutzer, email }], art: 'hinweis', daten: { titel: 'Titel', text: 'Text' } }));
+const anlegen = (jetzt = JETZT) => tx(t.pool, (db) => benachrichtigung.senden(systemCtx('probe', { jetzt }), db,
+  { empfaenger: [{ benutzer_id: benutzer }], art: 'hinweis', daten: { titel: 'Titel', text: 'Text' } }));
 const doppel = (antwort = { ok: true }) => { const mails = []; return { mails, send: async (m) => { mails.push(m); return antwort; } }; };
 const versende = (mailer, jetzt = JETZT) => fuehreAus(t.pool, 'mailversand', { mailer }, { jetzt });
 
 describe('benachrichtigung', () => {
-  it('legt Nachricht und Mail-Auftrag an; ohne E-Mail nur die Nachricht', async () => {
+  it('legt Nachricht und Mail-Auftrag an', async () => {
     await anlegen();
-    await anlegen(JETZT, null);
-    expect(await q('select benutzer_id, art, titel, text from nachrichten')).toHaveLength(2);
-    expect(await q('select an, betreff, text, status from mail_auftraege')).toEqual([{ an: 'a@example.org', betreff: 'Titel', text: 'Text', status: 'offen' }]);
+    expect(await q('select benutzer_id, art, titel, text from nachrichten')).toEqual([{ benutzer_id: benutzer, art: 'hinweis', titel: 'Titel', text: 'Text' }]);
+    expect(await q('select benutzer_id, betreff, text, status from mail_auftraege')).toEqual([{ benutzer_id: benutzer, betreff: 'Titel', text: 'Text', status: 'offen' }]);
   });
   it('bei Rollback entsteht nichts; Pool und unbekannte Art werden abgelehnt', async () => {
-    const args = { empfaenger: [{ benutzer_id: benutzer, email: 'a@example.org' }], art: 'hinweis', daten: { titel: 'T', text: 'T' } };
+    const args = { empfaenger: [{ benutzer_id: benutzer }], art: 'hinweis', daten: { titel: 'T', text: 'T' } };
     await expect(tx(t.pool, async (db) => { await benachrichtigung.senden(ctx(), db, args); throw new Error('abbruch'); })).rejects.toThrow('abbruch');
     expect(await q('select 1 from nachrichten union all select 1 from mail_auftraege')).toEqual([]);
     await expect(benachrichtigung.senden(ctx(), t.pool, args)).rejects.toThrow('Transaktion');
@@ -69,6 +69,18 @@ describe('benachrichtigung', () => {
     expect(await versende(m)).toEqual({ gesendet: 0 });
     expect(m.mails).toEqual([{ to: 'a@example.org', subject: 'Titel', text: 'Text' }]);
     expect(await q('select status, gesendet_am from mail_auftraege')).toEqual([{ status: 'gesendet', gesendet_am: JETZT }]);
+  });
+  it('ohne Adresse oder bei inaktivem Konto wird nicht gesendet, die Nachricht bleibt', async () => {
+    const m = doppel();
+    for (const sql of ['email = null', `email = 'a@example.org', aktiv = false`]) {
+      await anlegen();
+      await t.pool.query(`update benutzer set ${sql} where id = $1`, [benutzer]);
+      await versende(m);
+    }
+    await t.pool.query(`update benutzer set email = 'a@example.org', aktiv = true where id = $1`, [benutzer]);
+    expect(m.mails).toEqual([]);
+    expect(await q('select distinct status from mail_auftraege')).toEqual([{ status: 'fehlgeschlagen' }]);
+    expect(await q('select 1 from nachrichten')).toHaveLength(2);
   });
   it('wiederholt Fehlschläge mit Wartezeit und gibt nach 5 Versuchen auf', async () => {
     await anlegen();

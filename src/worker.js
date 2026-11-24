@@ -1,5 +1,6 @@
 // Worker-Prozess (AD-10): läuft aus demselben Image wie die API, Start mit `node src/worker.js`.
 import { fileURLToPath } from 'node:url';
+import { ladeMailAdresse } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPool, mitSperre } from './db.js';
 import { createMailer } from './mailer.js';
@@ -10,7 +11,7 @@ const log = (text) => console.log(`[worker] ${new Date().toISOString()} ${text}`
 
 /** Alle Jobs: Name → Dienstaufruf mit System-ctx. */
 const JOBS = {
-  mailversand: (ctx, pool, { mailer }) => versendeMails(ctx, pool, { mailer }),
+  mailversand: (ctx, pool, { mailer }) => versendeMails(ctx, pool, { mailer, adresseVon: ladeMailAdresse }),
 };
 
 /** Führt einen Job unter seinem Advisory-Lock aus; läuft er schon anderswo, passiert nichts (null). */

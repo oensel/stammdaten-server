@@ -59,6 +59,10 @@ export async function ladeKontext(db, benutzer, vereinId, { ohneWahl = false } =
 export const ladeBenutzerFuerKontext = async (db, id) =>
   (await db.query('select id, ist_super_admin, heimatverein_id from benutzer where id = $1', [id])).rows[0];
 
+/** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
+export const ladeMailAdresse = async (db, id) =>
+  (await db.query('select email from benutzer where id = $1 and aktiv and geloescht_am is null', [id])).rows[0]?.email || null;
+
 /** Alle freigegebenen Zugehörigkeiten: Verein, Rolle, wirksame Rechte, Mitglied und Kinder. */
 async function ladeZugehoerigkeiten(db, benutzerId) {
   return (await db.query(

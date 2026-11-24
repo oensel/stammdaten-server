@@ -2,7 +2,10 @@ import { notFound } from '../../errors.js';
 import * as daten from './daten.js';
 
 /** Aktive Verbandsrollen eines Benutzers; die Pipeline lädt sie einmal in ctx.rechte.verbandsrollen (ctx ist dann noch null). */
-export const ladeVerbandsrollen = (ctx, db, { benutzer_id }) => daten.verbandsrollen(db, benutzer_id);
+export const ladeVerbandsrollen = (_ctx, db, { benutzer_id }) => daten.verbandsrollen(db, benutzer_id);
+
+/** Benutzer mit einer aktiven Verbandsrolle in einem der Verbände: [{ benutzer_id }]. */
+export const rollentraeger = (_ctx, db, { verband_ids, rolle }) => daten.rollentraeger(db, { verbandIds: verband_ids, rolle });
 
 const istDjbAdmin = (ctx) => ctx.rechte.super_admin || ctx.rechte.verbandsrollen.some((r) => r.rolle === 'djb_admin');
 
