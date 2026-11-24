@@ -90,3 +90,42 @@ export const vereinsrolleEntziehen = async (db, { benutzerId, vereinId, rolleId,
   [benutzerId, vereinId, rolleId, jetzt, von])).rows[0];
 
 export const positivliste = async (db) => (await db.query('select schluessel from katalog_rechte where vereinsrolle_erlaubt')).rows.map((r) => r.schluessel);
+
+// ---- Delegation (Story 2.8) ----
+export const datenfilterLesen = async (db, schluessel) => (await db.query('select * from datenfilter where schluessel = $1', [schluessel])).rows[0];
+
+const SPALTEN = 'id, empfaenger_id, geber_id, verein_id, verband_id, recht, operation, datenfilter_id, gueltig_von, gueltig_bis, delegiert_aus_quelle, delegiert_aus_schluessel, grund, verwaist_seit';
+
+export const delegationEinfuegen = async (db, d) => (await db.query(
+  `insert into delegationen (empfaenger_id, geber_id, verein_id, verband_id, recht, operation, datenfilter_id, gueltig_von, gueltig_bis, delegiert_aus_quelle, delegiert_aus_schluessel, grund, erstellt_am)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning ${SPALTEN}`,
+  [d.empfaengerId, d.geberId, d.vereinId ?? null, d.verbandId ?? null, d.recht, d.operation, d.datenfilterId ?? null, d.von, d.bis, d.quelle?.art ?? null, d.quelle?.schluessel ?? null, d.grund ?? null, d.jetzt])).rows[0];
+
+export const delegationSperren = async (db, id) => (await db.query(`select ${SPALTEN} from delegationen where id = $1 and beendet_am is null for update`, [id])).rows[0];
+
+export const delegationenLesen = async (db, { vereinId, verbandId, nurVerwaist }) => (await db.query(
+  `select ${SPALTEN} from delegationen where beendet_am is null and ($1::uuid is null or verein_id = $1) and ($2::uuid is null or verband_id = $2)
+      and (not $3 or verwaist_seit is not null) order by erstellt_am`, [vereinId ?? null, verbandId ?? null, !!nurVerwaist])).rows;
+
+/** Beendet Delegationen eines Bereichs (alle eines Gebers oder alle verwaisten) und liefert sie. */
+export const delegationenBeenden = async (db, { id, vereinId, verbandId, geberId, nurVerwaist, von, jetzt }) => (await db.query(
+  `update delegationen set beendet_am = $1, beendet_von = $2
+    where beendet_am is null and ($3::uuid is null or id = $3) and ($4::uuid is null or verein_id = $4) and ($5::uuid is null or verband_id = $5)
+      and ($6::uuid is null or geber_id = $6) and (not $7 or verwaist_seit is not null) returning ${SPALTEN}`,
+  [jetzt, von, id ?? null, vereinId ?? null, verbandId ?? null, geberId ?? null, !!nurVerwaist])).rows;
+
+/** Der Geber hat die Quelle seines DELEGIEREN verloren: seine Delegationen gelten bis zum Ablauf weiter, sind aber zu prüfen. */
+export const delegationenVerwaisen = (db, { geberId, schluessel, vereinId, jetzt }) => db.query(
+  `update delegationen set verwaist_seit = $4 where geber_id = $1 and beendet_am is null and verwaist_seit is null and delegiert_aus_quelle is not null
+      and ($2::text is null or delegiert_aus_schluessel = $2) and ($3::uuid is null or verein_id = $3)`, [geberId, schluessel ?? null, vereinId ?? null, jetzt]);
+
+export const erhalteneDelegationenBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
+  'update delegationen set beendet_am = $3, beendet_von = $4 where empfaenger_id = $1 and verein_id = $2 and beendet_am is null', [benutzerId, vereinId, jetzt, von]);
+
+export const delegationenAlsQuellen = async (db, { benutzerId, kontext, heute }) => (await db.query(
+  `select d.recht || ':' || d.operation as recht, to_jsonb(f) as filter from delegationen d left join datenfilter f on f.id = d.datenfilter_id
+    where d.empfaenger_id = $1 and d.beendet_am is null and d.gueltig_von <= $4 and d.gueltig_bis >= $4
+      and case $2 when 'verein' then d.verein_id = $3 else d.verband_id = $3 end`, [benutzerId, kontext.art, kontext.id, heute])).rows;
+
+export const vereinsrollenBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
+  'update benutzer_vereinsrollen set beendet_am = $3, beendet_von = $4 where benutzer_id = $1 and verein_id = $2 and beendet_am is null', [benutzerId, vereinId, jetzt, von]);

@@ -2,7 +2,9 @@ import { inTransaktion } from '../../db.js';
 import { fehler, notFound } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as daten from './daten.js';
-import { darf, darfFelder, imKontext, listenbereich, projiziere } from './entscheidung.js';
+import { darf, darfFelder, imKontext, listenbereich, projiziere, quellenImBereich } from './entscheidung.js';
+import { filterEngerOderGleich } from './filter.js';
+import { scopeFuer } from './obergrenze.js';
 import { BASISRECHTE, KATALOG, kennt } from './katalog.js';
 
 export { darf, darfFelder, listenbereich, projiziere };
@@ -14,11 +16,17 @@ export const ladeVerbandsrollen = (_ctx, db, { benutzer_id }) => daten.verbandsr
 export const rollentraeger = (_ctx, db, { verband_ids, rolle }) => daten.rollentraeger(db, { verbandIds: verband_ids, rolle });
 
 /** Beendet alle direkt vergebenen Rechte eines Benutzers in einem Verein (Entzug oder Neuanfrage der Zugehörigkeit). */
-export const beendeDirektrechte = (ctx, db, { benutzer_id, verein_id }) =>
-  daten.direktrechteBeenden(db, { benutzerId: benutzer_id, vereinId: verein_id, von: ctx.benutzer?.id ?? null, jetzt: ctx.jetzt });
+export async function beendeDirektrechte(ctx, db, { benutzer_id, verein_id }) {
+  const ziel = { benutzerId: benutzer_id, vereinId: verein_id, von: ctx.benutzer?.id ?? null, jetzt: ctx.jetzt };
+  await daten.direktrechteBeenden(db, ziel);
+  await daten.vereinsrollenBeenden(db, ziel);
+  await daten.erhalteneDelegationenBeenden(db, ziel);
+  // Delegationen, die er gegeben hat, gelten bis zum Ablauf weiter, sind aber zu prüfen (Regel 4)
+  await daten.delegationenVerwaisen(db, { geberId: benutzer_id, vereinId: verein_id, jetzt: ctx.jetzt });
+}
 
 /** Quellen des aktiven Kontexts; die Pipeline lädt sie einmal in ctx.rechte.quellen. Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
-export async function ladeQuellen(_ctx, db, { kontext, benutzerId, rolle, rechte = [], verbandsrollen = [] }) {
+export async function ladeQuellen(_ctx, db, { kontext, benutzerId, jetzt, rolle, rechte = [], verbandsrollen = [] }) {
   if (!kontext) return [];
   const art = kontext.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle';
   const schluessel = art === 'vereinsrolle' ? [rolle, ...rechte.filter((r) => r !== 'pruefer')] : verbandsrollen.map((r) => r.rolle);
@@ -31,9 +39,15 @@ export async function ladeQuellen(_ctx, db, { kontext, benutzerId, rolle, rechte
   const rollen = [...(await daten.rollenMitRechten(db, [...new Set(schluessel)])).map(ohneDelegieren), ...eigene];
   const ebene = kontext.art === 'verband' ? EBENEN[await daten.ebene(db, kontext.id)] : undefined;
   const bereich = Object.freeze(ebene ? { ...kontext, ebene } : { ...kontext });
-  return rollen
-    .map((r) => imKontext({ art, schluessel: r.schluessel, rechte: r.rechte, bereich, filter: r.filter }, kontext))
-    .filter(Boolean).map(Object.freeze);
+  // Delegierte Rechte (FR-22) gelten nur im Kontext ihres Bereichs und bis zum Ablaufdatum
+  const delegiert = benutzerId && jetzt
+    ? (await daten.delegationenAlsQuellen(db, { benutzerId, kontext, heute: jetzt.toISOString().slice(0, 10) }))
+      .map((d) => ({ art: 'direkt', schluessel: 'delegation', rechte: [d.recht], bereich, filter: d.filter ? { [d.recht]: d.filter } : {} }))
+    : [];
+  return [
+    ...rollen.map((r) => imKontext({ art, schluessel: r.schluessel, rechte: r.rechte, bereich, filter: r.filter }, kontext)),
+    ...delegiert.map((q) => imKontext(q, kontext)),
+  ].filter(Boolean).map(Object.freeze);
 }
 const EBENEN = { 1: 'dachverband', 2: 'landesverband', 3: 'bezirk', 4: 'kreis' };
 
@@ -117,6 +131,7 @@ export async function verbandsrolleEntziehen(ctx, db, { verband_id, id, grund = 
     verlangeRolle(ctx, alt.rolle);
     const stv = await daten.stellvertreterAktiv(c, id);
     const ende = await daten.rolleBeenden(c, { id, von: ctx.benutzer.id, grund, jetzt: ctx.jetzt });
+    await daten.delegationenVerwaisen(c, { geberId: alt.benutzer_id, schluessel: alt.rolle, jetzt: ctx.jetzt });
     await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'verbandsrolle', objekt_id: id, alt: ende, grund });
     for (const s of stv) await audit.schreiben(ctx, c, { aktion: 'stellvertreter_entzogen', objekt_art: 'verbandsrolle', objekt_id: s.id, alt: { benutzer_id: s.benutzer_id, amt: id }, grund: 'Amt beendet' });
     return ende;
@@ -240,5 +255,100 @@ export async function vereinsrolleEntziehen(ctx, db, { verein_id, id, benutzer_i
     if (!alt) throw notFound();
     await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'vereinsrolle', objekt_id: alt.id, alt });
     return alt;
+  });
+}
+
+// ---- Delegation (FR-22, E6, E102, Story 2.8) ----
+Object.assign(VERSTOSS, {
+  delegation_zu_lang: [422, 'Eine Delegation gilt höchstens zwei Jahre', 'frist_ungueltig'],
+  delegation_kein_mitglied: [422, 'Der Empfänger gehört dem Verein nicht an', 'empfaenger_kein_mitglied'],
+  delegation_benutzer_unbekannt: [404, 'Benutzer nicht gefunden', 'benutzer_unbekannt'],
+  delegation_selbst: [422, 'Eine Delegation an sich selbst ist sinnlos', 'selbstdelegation'],
+  keine_weiterdelegation: [422, 'Delegierte Rechte lassen sich nicht weitergeben', 'weiterdelegation'],
+  delegieren_nur_super_admin: [422, 'DELEGIEREN vergibt nur der Super-Admin', 'delegieren_nur_super_admin'],
+  delegation_ohne_quelle: [422, 'Ohne eigene Rolle als Quelle darf nur der Super-Admin vergeben', 'delegieren_nur_super_admin'],
+  delegationen_recht_operation_fkey: [422, 'Unbekanntes Recht', 'recht_unbekannt'],
+  delegationen_verein_id_fkey: [404, 'Verein nicht gefunden', 'nicht_gefunden'],
+  delegationen_verband_id_fkey: [404, 'Verband nicht gefunden', 'nicht_gefunden'],
+  delegationen_empfaenger_id_fkey: [404, 'Benutzer nicht gefunden', 'benutzer_unbekannt'],
+});
+
+const tag = (d) => d.toISOString().slice(0, 10);
+const plusJahre = (iso, n) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCFullYear(d.getUTCFullYear() + n); return tag(d); };
+const bereichsZiel = ({ verein_id, verband_id }) => (verein_id ? { vereine: [verein_id] } : { verbaende: [verband_id] });
+const bereichsFelder = ({ verein_id = null, verband_id = null }) => ({ vereinId: verein_id, verbandId: verband_id });
+
+export async function delegationAnlegen(ctx, db, { empfaenger_id, recht, verein_id = null, verband_id = null, datenfilter = null, gueltig_bis, grund = null }) {
+  if (!kennt(recht)) throw fehler(422, `Unbekanntes Recht: ${recht}`, 'recht_unbekannt');
+  const [name, operation] = recht.split(':');
+  const ziel = await ladeZiel(ctx, db, bereichsZiel({ verein_id, verband_id }));
+  const von = tag(ctx.jetzt);
+  if (gueltig_bis < von || gueltig_bis > plusJahre(von, 2)) throw fehler(422, 'Die Delegation muss befristet sein, höchstens zwei Jahre', 'frist_ungueltig');
+  if (empfaenger_id === ctx.benutzer.id) throw fehler(422, 'Eine Delegation an sich selbst ist sinnlos', 'selbstdelegation');
+  const filter = datenfilter ? await daten.datenfilterLesen(db, datenfilter) : null;
+  if (datenfilter && !filter) throw fehler(422, 'Unbekannter Datenfilter', 'datenfilter_unbekannt');
+
+  let quelle = null;
+  if (operation === 'DELEGIEREN') {
+    if (!ctx.rechte.super_admin) throw fehler(422, 'DELEGIEREN vergibt nur der Super-Admin', 'delegieren_nur_super_admin');
+    if (!darf(ctx, recht, ziel)) throw notFound();
+  } else if (ctx.rechte.super_admin) {
+    if (!darf(ctx, recht, ziel)) throw notFound();
+  } else {
+    const delegieren = `${name}:DELEGIEREN`;
+    if (!kennt(delegieren)) throw fehler(422, `${recht} lässt sich nicht delegieren`, 'recht_nicht_delegierbar');
+    // Delegierte Rechte gelten nicht als Quelle (nur eine Ebene)
+    const eigene = ctx.rechte.quellen.filter((q) => q.art !== 'direkt');
+    if (!ctx.rechte.app_scopes.includes(scopeFuer(delegieren)) || !eigene.some((q) => q.rechte.includes(delegieren))) throw notFound();
+    if (!darf(ctx, delegieren, ziel)) throw fehler(422, 'Der Bereich liegt außerhalb deines Bereichs', 'bereich_zu_weit');
+    const quellen = quellenImBereich({ rechte: { quellen: eigene } }, recht, ziel);
+    if (!quellen.length) throw fehler(422, `Du hast ${recht} in diesem Bereich nicht`, 'recht_nicht_delegierbar');
+    const q = quellen.find((x) => filterEngerOderGleich(filter, x.filter?.[recht] ?? null));
+    if (!q) throw fehler(422, 'Der Datenfilter ist weiter als dein eigener', 'filter_zu_weit');
+    quelle = { art: q.art === 'lizenz' ? 'lizenz' : 'rolle', schluessel: q.schluessel };
+  }
+  return schreibe(db, async (c) => {
+    const neu = await daten.delegationEinfuegen(c, {
+      empfaengerId: empfaenger_id, geberId: ctx.benutzer.id, ...bereichsFelder({ verein_id, verband_id }), recht: name, operation,
+      datenfilterId: filter?.id, von, bis: gueltig_bis, quelle, grund, jetzt: ctx.jetzt,
+    });
+    await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'delegation', objekt_id: neu.id, neu, grund });
+    return neu;
+  });
+}
+
+/** Vereins-Admin bzw. Landesverbands-Admin der Ebene (oder Super-Admin). */
+const adminRecht = (bereich) => (bereich.verein_id ? 'rolle:AENDERN' : 'verbandsrolle:LOESCHEN');
+const darfAlsAdmin = async (ctx, db, bereich) => darf(ctx, adminRecht(bereich), await ladeZiel(ctx, db, bereichsZiel(bereich)));
+
+export async function delegationenLesen(ctx, db, { verein_id = null, verband_id = null, verwaist = false }) {
+  if (!verein_id === !verband_id) throw fehler(400, 'Genau einen Bereich angeben: verein_id oder verband_id', 'ungueltige_anfrage');
+  if (!await darfAlsAdmin(ctx, db, { verein_id, verband_id })) throw notFound();
+  return { delegationen: await daten.delegationenLesen(db, { vereinId: verein_id, verbandId: verband_id, nurVerwaist: verwaist }) };
+}
+
+const entzugAuditieren = async (ctx, c, ds, grund) => {
+  for (const d of ds) await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'delegation', objekt_id: d.id, alt: d, grund });
+  return ds;
+};
+
+export async function delegationEntziehen(ctx, db, { id, grund = null }) {
+  return schreibe(db, async (c) => {
+    const alt = await daten.delegationSperren(c, id);
+    if (!alt) throw notFound();
+    if (alt.geber_id !== ctx.benutzer.id && !await darfAlsAdmin(ctx, c, alt)) throw notFound();
+    const [ende] = await entzugAuditieren(ctx, c, await daten.delegationenBeenden(c, { id, von: ctx.benutzer.id, jetzt: ctx.jetzt }), grund);
+    return ende;
+  });
+}
+
+/** Alle verwaisten Delegationen eines Bereichs oder alle eines Gebers (z. B. bei Missbrauch) in einem Schritt entziehen. */
+export async function delegationenEntziehen(ctx, db, { verein_id = null, verband_id = null, geber_id = null, verwaist = false, grund }) {
+  if (!verein_id === !verband_id || (!geber_id && !verwaist)) throw fehler(400, 'Einen Bereich und geber_id oder verwaist angeben', 'ungueltige_anfrage');
+  if (!await darfAlsAdmin(ctx, db, { verein_id, verband_id })) throw notFound();
+  return schreibe(db, async (c) => {
+    const ds = await daten.delegationenBeenden(c, { ...bereichsFelder({ verein_id, verband_id }), geberId: geber_id, nurVerwaist: verwaist, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+    await entzugAuditieren(ctx, c, ds, grund);
+    return { entzogen: ds.length, delegationen: ds };
   });
 }

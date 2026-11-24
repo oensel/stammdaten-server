@@ -30,3 +30,34 @@ export function wertErfuellt(f, werte, eigenerRang) {
       && (!f.wert_bis_eigener_grad || (Number.isInteger(eigenerRang) && rang <= eigenerRang));
   });
 }
+
+/** Feldgruppen je Person; Filter nennen Gruppen oder einzelne Felder. */
+export const PERSON_FELDER = {
+  stamm: ['id', 'vorname', 'nachname', 'geburtsdatum', 'geschlecht', 'nationalitaet', 'change_seq'],
+  kontakt: ['strasse', 'plz', 'ort', 'email', 'telefon'],
+};
+const einzeln = (felder) => new Set(felder.flatMap((f) => (Object.hasOwn(PERSON_FELDER, f) ? PERSON_FELDER[f] : [f])));
+
+/**
+ * Ist der Filter `neu` höchstens so weit wie der des Gebers (Delegation, FR-22)? null = unbeschränkt.
+ * Hat der Geber einen Filter, braucht die Delegation einen; Spannen und Felder müssen innerhalb liegen, nur_aktive darf nicht fallen.
+ */
+export function filterEngerOderGleich(neu, geber) {
+  if (!geber) return true;
+  if (!neu) return false;
+  if (geber.nur_aktive && !neu.nur_aktive) return false;
+  const spanne = (f, [min, max]) => [f[min] ?? 1, f[max] ?? 19];
+  for (const [min, max] of [['subjekt_min_rang', 'subjekt_max_rang'], ['wert_min_rang', 'wert_max_rang']]) {
+    const [a1, a2] = spanne(neu, [min, max]); const [b1, b2] = spanne(geber, [min, max]);
+    if (a1 < b1 || a2 > b2) return false;
+  }
+  if (geber.wert_art != null && neu.wert_art !== geber.wert_art) return false;
+  if (geber.subjekt_lizenz != null && neu.subjekt_lizenz !== geber.subjekt_lizenz) return false;
+  if (geber.wert_bis_eigener_grad && !neu.wert_bis_eigener_grad) return false;
+  if (geber.felder != null) {
+    if (neu.felder == null) return false;
+    const erlaubt = einzeln(geber.felder);
+    if (![...einzeln(neu.felder)].every((f) => erlaubt.has(f))) return false;
+  }
+  return true;
+}

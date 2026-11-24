@@ -23,7 +23,7 @@ export default function routen(v2) {
   });
   v2({
     method: 'DELETE', url: '/verbaende/:id/rollen/:rolle_id', schema: { params: amt, querystring: objekt({ grund: text }) },
-    handler: (ctx, db, { params, query }) => dienst.verbandsrolleEntziehen(ctx, db, { verband_id: params.id, id: params.rolle_id, grund: query.grund }),
+    handler: (ctx, db, { params, query: { grund } }) => dienst.verbandsrolleEntziehen(ctx, db, { verband_id: params.id, id: params.rolle_id, grund }),
   });
   v2({
     method: 'POST', url: '/verbaende/:id/rollen/:rolle_id/stellvertreter', status: 201,
@@ -33,7 +33,7 @@ export default function routen(v2) {
   v2({
     method: 'DELETE', url: '/verbaende/:id/rollen/:rolle_id/stellvertreter/:stellvertreter_id',
     schema: { params: stv, querystring: objekt({ grund: text }, ['grund']) },
-    handler: (ctx, db, { params, query }) => dienst.stellvertreterEntziehen(ctx, db, { verband_id: params.id, id: params.rolle_id, stellvertreter_id: params.stellvertreter_id, grund: query.grund }),
+    handler: (ctx, db, { params, query: { grund } }) => dienst.stellvertreterEntziehen(ctx, db, { verband_id: params.id, id: params.rolle_id, stellvertreter_id: params.stellvertreter_id, grund }),
   });
   v2({ method: 'GET', url: '/vereine/:id/rollen', schema: { params: verein }, handler: (ctx, db, { params }) => dienst.vereinsrollenLesen(ctx, db, { verein_id: params.id }) });
   v2({
@@ -55,5 +55,29 @@ export default function routen(v2) {
   v2({
     method: 'DELETE', url: '/vereine/:id/rollen/:rolle_id/benutzer/:benutzer_id', schema: { params: vergabe },
     handler: (ctx, db, { params }) => dienst.vereinsrolleEntziehen(ctx, db, { verein_id: params.id, id: params.rolle_id, benutzer_id: params.benutzer_id }),
+  });
+  v2({
+    method: 'POST', url: '/delegationen', status: 201,
+    schema: {
+      body: objekt({
+        empfaenger_id: uuid, recht: { type: 'string', pattern: '^[a-z_]+:[A-Z]+$' }, verein_id: uuid, verband_id: uuid,
+        datenfilter: { type: 'string', pattern: '^[a-z0-9_]{1,60}$' }, gueltig_bis: { type: 'string', format: 'date' }, grund: text,
+      }, ['empfaenger_id', 'recht', 'gueltig_bis']),
+    },
+    handler: (ctx, db, { body }) => dienst.delegationAnlegen(ctx, db, body),
+  });
+  v2({
+    method: 'GET', url: '/delegationen',
+    schema: { querystring: objekt({ verein_id: uuid, verband_id: uuid, verwaist: { type: 'boolean' } }) },
+    handler: (ctx, db, { query: bereich }) => dienst.delegationenLesen(ctx, db, bereich),
+  });
+  v2({
+    method: 'POST', url: '/delegationen/entziehen',
+    schema: { body: objekt({ verein_id: uuid, verband_id: uuid, geber_id: uuid, verwaist: { type: 'boolean' }, grund: text }, ['grund']) },
+    handler: (ctx, db, { body }) => dienst.delegationenEntziehen(ctx, db, body),
+  });
+  v2({
+    method: 'DELETE', url: '/delegationen/:id', schema: { params: verband, querystring: objekt({ grund: text }) },
+    handler: (ctx, db, { params, query: { grund } }) => dienst.delegationEntziehen(ctx, db, { id: params.id, grund }),
   });
 }
