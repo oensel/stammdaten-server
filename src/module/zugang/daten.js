@@ -41,8 +41,11 @@ export const qrWiderrufen = async (db, { id, vereinId, jetzt }) => eine(db,
 export const qrGueltig = (db, { hash, jetzt }) => eine(db,
   'select verein_id from vereins_qr_codes where token_hash = $1 and widerrufen_am is null and laeuft_ab_am > $2 for update', [hash, jetzt]);
 
-export const offeneAnfragen = async (db, vereinId) => (await eine(db,
-  `select count(*)::int n from benutzer_vereine where verein_id = $1 and status = 'angefragt' and geloescht_am is null`, [vereinId])).n;
+/** Sperrt je Verein bis zum Ende der Transaktion, damit parallele Anfragen das Limit nicht gemeinsam überschreiten. */
+export async function offeneAnfragen(db, vereinId) {
+  await db.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [vereinId]);
+  return (await eine(db, `select count(*)::int n from benutzer_vereine where verein_id = $1 and status = 'angefragt' and geloescht_am is null`, [vereinId])).n;
+}
 export const vereinsAdmins = async (db, vereinId) => (await db.query(
   `select benutzer_id from benutzer_vereine where verein_id = $1 and rolle = 'admin' and status = 'freigegeben' and geloescht_am is null`, [vereinId])).rows;
 export const benutzerName = (db, id) => eine(db, 'select benutzername, vorname, nachname from benutzer where id = $1', [id]);

@@ -21,6 +21,8 @@ export function errorHandler(err, req, reply) {
   let status = err.status || err.statusCode || 500;
   let code = err.code;
   let detail = err.message;
+  // NUL-Zeichen und ungültige Bytefolgen weist PostgreSQL ab: das ist eine fehlerhafte Eingabe, kein Serverfehler
+  if (err.code === '22021' || err.code === '22P05') { status = 400; code = 'ungueltige_anfrage'; detail = 'Die Eingabe enthält ungültige Zeichen'; }
   if (err.validation) { status = 400; code = 'ungueltige_anfrage'; }
   if (status >= 500) { req.log.error(err); detail = 'Interner Fehler'; code = 'interner_fehler'; }
   reply.status(status).type('application/problem+json').send({
