@@ -13,7 +13,7 @@ const ALLE = Object.entries(KATALOG).flatMap(([n, ops]) => ops.map((o) => scopeF
 const vorfahren = { V1: ['K1', 'LV1', 'DJB'], V2: ['K2', 'LV2', 'DJB'], LV1: ['LV1', 'DJB'], K1: ['K1', 'LV1', 'DJB'] };
 const auf = (v, extra = {}) => ({ vereine: [v], heimatverein_id: v, vorfahren, ...extra });
 const B = { V1: { art: 'verein', id: 'V1' }, LV1: { art: 'verband', id: 'LV1', ebene: 'landesverband' }, K1: { art: 'verband', id: 'K1', ebene: 'kreis' }, DJB: { art: 'verband', id: 'DJB', ebene: 'dachverband' } };
-const quelle = (bereich, rechte, art = bereich.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle', felder = art === 'verbandsrolle' ? ['stamm'] : null) => ({ art, schluessel: 'x', rechte, bereich, felder });
+const quelle = (bereich, rechte, art = bereich.art === 'verein' ? 'vereinsrolle' : 'verbandsrolle', filter = {}) => ({ art, schluessel: 'x', rechte, bereich, filter });
 const mit = (...quellen) => baueCtx({ benutzer: { id: 'u' }, kontext: { art: 'verein', id: 'V1' }, anwendung: 'a', jetzt: new Date(), rechte: { quellen, app_scopes: ALLE } });
 
 describe('darf(): Bereich × Quelle × Recht', () => {
@@ -60,7 +60,7 @@ describe('darf(): Bereich × Quelle × Recht', () => {
     const faelle = [['mitglieder:LOESCHEN', auf('V1')], ['personen_zusammenfuehrung:AENDERN', auf('V1')], ['mitglieder:AENDERN', auf('V1', { judopassdaten: true })]];
     for (const [recht, ziel] of faelle) {
       expect(darf(sa(), recht, ziel)).toBe(false);
-      expect(listenbereich(sa(), recht, ziel)).toEqual({ alle: false, vereine: [], verbaende: [] });
+      expect(listenbereich(sa(), recht, ziel)).toEqual({ alle: false, vereine: [], verbaende: [], gefiltert: [] });
       expect(darf(sa(quelle(B.LV1, [recht])), recht, ziel)).toBe(true);
       expect(listenbereich(sa(quelle(B.LV1, [recht])), recht, ziel).verbaende).toEqual(['LV1']);
     }

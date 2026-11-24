@@ -1,9 +1,9 @@
-import { notFound } from '../../errors.js';
+import { fehler, notFound } from '../../errors.js';
 import * as daten from './daten.js';
-import { darf, imKontext, listenbereich, projiziere } from './entscheidung.js';
+import { darf, darfFelder, imKontext, listenbereich, projiziere } from './entscheidung.js';
 import { BASISRECHTE, KATALOG } from './katalog.js';
 
-export { darf, listenbereich, projiziere };
+export { darf, darfFelder, listenbereich, projiziere };
 
 /** Aktive Verbandsrollen eines Benutzers; die Pipeline lädt sie einmal in ctx.rechte.verbandsrollen (ctx ist dann noch null). */
 export const ladeVerbandsrollen = (_ctx, db, { benutzer_id }) => daten.verbandsrollen(db, benutzer_id);
@@ -15,9 +15,6 @@ export const rollentraeger = (_ctx, db, { verband_ids, rolle }) => daten.rollent
 export const beendeDirektrechte = (ctx, db, { benutzer_id, verein_id }) =>
   daten.direktrechteBeenden(db, { benutzerId: benutzer_id, vereinId: verein_id, von: ctx.benutzer?.id ?? null, jetzt: ctx.jetzt });
 
-// Ohne Kontaktdaten: alle Verbandsrollen (E10) und Trainer (Seed-Matrix)
-const felderVon = (art, schluessel) => (art === 'verbandsrolle' || schluessel === 'trainer' ? ['stamm'] : null);
-
 /** Quellen des aktiven Kontexts; die Pipeline lädt sie einmal in ctx.rechte.quellen. Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
 export async function ladeQuellen(_ctx, db, { kontext, rolle, rechte = [], verbandsrollen = [] }) {
   if (!kontext) return [];
@@ -27,7 +24,7 @@ export async function ladeQuellen(_ctx, db, { kontext, rolle, rechte = [], verba
   const ebene = kontext.art === 'verband' ? EBENEN[await daten.ebene(db, kontext.id)] : undefined;
   const bereich = Object.freeze(ebene ? { ...kontext, ebene } : { ...kontext });
   return rollen
-    .map((r) => imKontext({ art, schluessel: r.schluessel, rechte: r.rechte, bereich, felder: felderVon(art, r.schluessel) }, kontext))
+    .map((r) => imKontext({ art, schluessel: r.schluessel, rechte: r.rechte, bereich, filter: r.filter }, kontext))
     .filter(Boolean).map(Object.freeze);
 }
 const EBENEN = { 1: 'dachverband', 2: 'landesverband', 3: 'bezirk', 4: 'kreis' };
@@ -41,6 +38,12 @@ export async function ladeZiel(_ctx, db, ziel) {
 /** Wirft 404 (nie 403), wenn darf() nein sagt. */
 export function verlange(ctx, recht, ziel) {
   if (!darf(ctx, recht, ziel)) throw notFound();
+}
+
+/** Schreiben bestimmter Felder: kein Zugriff → 404, Zugriff aber unerlaubtes Feld → 422. */
+export function verlangeFelder(ctx, recht, art, namen, ziel) {
+  verlange(ctx, recht, ziel);
+  if (!darfFelder(ctx, recht, art, namen, ziel)) throw fehler(422, 'Mindestens ein Feld darf nicht geändert werden', 'feld_nicht_erlaubt');
 }
 
 /** Wie verlange(), lädt vorher die Verbände über dem Ziel. */

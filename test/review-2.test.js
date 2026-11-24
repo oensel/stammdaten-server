@@ -244,9 +244,9 @@ describe('Testlücken (21)', () => {
     expect((await verbandsquellen('landesvertreter', baum.lv)).bereich.ebene).toBe('landesverband');
     expect((await verbandsquellen('bezirks_dan_beauftragter', baum.bezirk)).bereich.ebene).toBe('bezirk');
     expect((await verbandsquellen('kreis_dan_vorsitzender', baum.kreis)).bereich.ebene).toBe('kreis');
-    expect((await verbandsquellen('landesvertreter', baum.lv)).felder).toEqual(['stamm']);
+    expect((await verbandsquellen('landesvertreter', baum.lv)).filter['mitglieder:LESEN'].felder).toEqual(['stamm']);
     const verein = await ladeQuellen(null, t.pool, { kontext: { art: 'verein', id: jc }, rolle: 'admin', rechte: ['trainer', 'kassierer', 'pruefer'] });
-    expect(Object.fromEntries(verein.map((x) => [x.schluessel, x.felder]))).toEqual({ admin: null, kassierer: null, trainer: ['stamm'] });
+    expect(Object.fromEntries(verein.map((x) => [x.schluessel, x.filter['mitglieder:LESEN']?.felder]))).toEqual({ admin: undefined, kassierer: undefined, trainer: ['stamm'] });
   });
 
   it('Seed-Matrix: Rollen haben genau die vorgesehenen Rechte', async () => {
