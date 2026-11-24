@@ -34,7 +34,7 @@ export function wertErfuellt(f, werte, eigenerRang) {
 /** Feldgruppen je Person; Filter nennen Gruppen oder einzelne Felder. */
 export const PERSON_FELDER = {
   stamm: ['id', 'vorname', 'nachname', 'geburtsdatum', 'geschlecht', 'nationalitaet', 'change_seq'],
-  kontakt: ['strasse', 'plz', 'ort', 'email', 'telefon'],
+  kontakt: ['strasse', 'plz', 'ort', 'land', 'email', 'telefon'],
 };
 const einzeln = (felder) => new Set(felder.flatMap((f) => (Object.hasOwn(PERSON_FELDER, f) ? PERSON_FELDER[f] : [f])));
 

@@ -131,3 +131,7 @@ export async function vereinLesen(ctx, db, { id }) {
   if (!verein) throw notFound();
   return verein;
 }
+
+/** Für andere Module, ohne eigene Rechteprüfung: der Aufrufer hat das Ziel schon geprüft. */
+export const vereinFuer = (_ctx, db, { id }) => daten.vereinLesen(db, id);
+export const landesverbandVon = (_ctx, db, { verein_id }) => daten.landesverbandVon(db, verein_id);
