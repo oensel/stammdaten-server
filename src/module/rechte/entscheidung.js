@@ -105,6 +105,8 @@ export function projiziere(ctx, art, datensatz, ziel) {
 /** Schreiben: eine einzige Quelle muss Ziel und alle genannten Felder erlauben (Filter werden nicht kombiniert). */
 export function darfFelder(ctx, recht, art, namen, ziel) {
   verlangeArt(art);
+  // Feste Regel (FR-18): die Person ab 14 und Benutzer mit Änderungszugriff pflegen genau die Kontaktdaten, in jedem Kontext
+  if (recht === 'mitglieder:AENDERN' && ziel.eigen_kontakt && ctx.benutzer && !scopeFehlt(ctx, recht) && namen.every((n) => FELDER[art].kontakt?.includes(n))) return true;
   if (!darf(ctx, recht, ziel)) return false;
   const alle = Object.values(FELDER[art]).flat();
   if (!namen.every((n) => alle.includes(n))) return false;

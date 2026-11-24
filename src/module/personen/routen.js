@@ -9,6 +9,10 @@ const PERSON = {
   strasse: text, plz: text, ort: text, land: { type: 'string', pattern: '^[A-Z]{2}$' }, email: { type: 'string', format: 'email', maxLength: 200 }, telefon: text,
 };
 
+const leer = (s) => ({ ...s, type: ['string', 'null'] });
+const KONTAKT = { strasse: leer(text), plz: leer(text), ort: leer(text), land: PERSON.land, email: leer(PERSON.email), telefon: leer(text) };
+const mitId = objekt({ id: uuid }, ['id']);
+
 export default function routen(v2) {
   v2({
     method: 'POST', url: '/vereine/:id/mitglieder', status: 201,
@@ -17,5 +21,10 @@ export default function routen(v2) {
       body: objekt({ person: objekt(PERSON, ['vorname', 'nachname', 'geburtsdatum']), eintritt: datum, judopass_id: { ...text, maxLength: 60 } }, ['person']),
     },
     handler: (ctx, db, { params, body }) => dienst.personAnlegen(ctx, db, { verein_id: params.id, ...body }),
+  });
+  v2({ method: 'GET', url: '/personen/:id', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.personLesen(ctx, db, params) });
+  v2({
+    method: 'PATCH', url: '/personen/:id/kontakt', ifMatch: true, schema: { params: mitId, body: { ...objekt(KONTAKT), minProperties: 1 } },
+    handler: (ctx, db, { params, body, version }) => dienst.kontaktAendern(ctx, db, { id: params.id, version, aenderung: body }),
   });
 }
