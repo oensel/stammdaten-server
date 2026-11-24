@@ -5,12 +5,14 @@
 import { BASISRECHTE, kennt } from './katalog.js';
 import { scopeFuer } from './obergrenze.js';
 
-// Nur der Landesverband des Heimatvereins (E79)
+// Nur der Landesverband des Heimatvereins (E79), auch nicht der Super-Admin (Nutzerentscheid 2026-11-24)
 const NUR_LV = ['mitglieder:LOESCHEN', 'personen_zusammenfuehrung:AENDERN'];
 // Der Heimatverein muss im Bereich liegen
 const NUR_HEIMAT = ['judopass_antrag:LESEN', 'judopass_antrag:ANLEGEN', 'judopass_antrag:AENDERN'];
 // Eigene Person und Personen mit Zugriff (FR-18), unabhängig vom Kontext
 const EIGEN = ['mitglieder:LESEN', 'graduierung:LESEN'];
+const nurLv = (recht, judopassdaten) => NUR_LV.includes(recht) || (recht === 'mitglieder:AENDERN' && !!judopassdaten);
+
 /** Schränkt eine Quelle auf den aktiven Kontext ein (FR-15, E104); null = wirkt dort nicht. `vorfahren`: Verbände über dem Kontextverein. */
 export function imKontext(quelle, kontext, vorfahren = []) {
   if (!kontext) return null;
@@ -26,7 +28,7 @@ const deckt = (bereich, id, ziel) => (bereich.art === 'verein' ? bereich.id === 
 function erlaubtQuelle(q, recht, ziel) {
   if (!q.rechte.includes(recht)) return false;
   if (ziel.global) return q.bereich.ebene === 'dachverband';
-  if (NUR_LV.includes(recht) || (recht === 'mitglieder:AENDERN' && ziel.judopassdaten)) {
+  if (nurLv(recht, ziel.judopassdaten)) {
     return q.bereich.ebene === 'landesverband' && !!ziel.heimatverein_id && deckt(q.bereich, ziel.heimatverein_id, ziel);
   }
   if (NUR_HEIMAT.includes(recht)) return !!ziel.heimatverein_id && deckt(q.bereich, ziel.heimatverein_id, ziel);
@@ -42,7 +44,7 @@ export function darf(ctx, recht, ziel = {}) {
   if (!ctx.benutzer) return false;
   if (BASISRECHTE.includes(recht)) return true;
   if (scopeFehlt(ctx, recht)) return false;
-  if (ctx.rechte.super_admin) return true;
+  if (ctx.rechte.super_admin && !nurLv(recht, ziel.judopassdaten)) return true;
   if (ziel.eigen && EIGEN.includes(recht)) return true;
   return ctx.rechte.quellen.some((q) => erlaubtQuelle(q, recht, ziel));
 }
@@ -57,9 +59,9 @@ export function listenbereich(ctx, recht, { judopassdaten = false } = {}) {
   if (!ctx.benutzer) return leer;
   if (BASISRECHTE.includes(recht)) return { ...leer, alle: true };
   if (scopeFehlt(ctx, recht)) return leer;
-  if (ctx.rechte.super_admin) return { ...leer, alle: true };
-  const nurLv = NUR_LV.includes(recht) || (recht === 'mitglieder:AENDERN' && judopassdaten);
-  const b = ctx.rechte.quellen.filter((q) => q.rechte.includes(recht) && (!nurLv || q.bereich.ebene === 'landesverband')).map((q) => q.bereich);
+  const lv = nurLv(recht, judopassdaten);
+  if (ctx.rechte.super_admin && !lv) return { ...leer, alle: true };
+  const b = ctx.rechte.quellen.filter((q) => q.rechte.includes(recht) && (!lv || q.bereich.ebene === 'landesverband')).map((q) => q.bereich);
   const ids = (art) => [...new Set(b.filter((x) => x.art === art).map((x) => x.id))];
   return { alle: false, vereine: ids('verein'), verbaende: ids('verband') };
 }
