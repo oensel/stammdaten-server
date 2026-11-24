@@ -1,8 +1,9 @@
 // Anmeldung: POST /auth/login, /auth/pin, /auth/logout, /oauth/token (refresh_token)
 import { tx } from '../db.js';
-import { badRequest, forbidden, tooMany, unauthorized } from '../errors.js';
-import { ladeAnwendung, ladeKontext, pruefeBearer, rotiere, stelleAus, widerrufeAlle, widerrufeFamilie } from '../auth.js';
+import { badRequest, forbidden, notFound, tooMany, unauthorized } from '../errors.js';
+import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeStartkontext, ladeVerbandskontext, pruefeBearer, rotiere, stelleAus, widerrufeAlle, widerrufeFamilie } from '../auth.js';
 import { PIN_RE, PW_MAX, sha256, verifyDummy, verifySecret } from '../passwords.js';
+import { v2Fehler } from '../pipeline/index.js';
 import { signJwt } from '../jwt.js';
 import { randomUUID } from 'node:crypto';
 
@@ -82,7 +83,7 @@ export default async function authRoutes(app) {
   async function melde({ benutzer, vereinId, anwendung, geraet, geraetToken, web = false }) {
     return tx(pool, async (db) => {
       // SSO: Web-Anmeldung ohne Pflicht-Vereinswahl (die App wählt aus `vereine` im Token); Geräte bleiben an einen Verein gebunden
-      const kontext = await ladeKontext(db, benutzer, vereinId, { ohneWahl: web && !geraet });
+      const kontext = await ladeStartkontext(db, benutzer, vereinId, { ohneWahl: web && !geraet });
       const geraetId = await geraetFuer(db, { benutzer, kontext, anwendung, geraet });
       if (geraetToken && !geraetId) throw badRequest('geraet_token braucht ein Gerät', 'geraet_fehlt');
       await db.query(
@@ -222,6 +223,41 @@ export default async function authRoutes(app) {
     const out = await tx(pool, async (db) => {
       const kontext = await ladeKontext(db, benutzer, req.body.verein_id);
       await widerrufeFamilie(db, claims.sid);
+      return stelleAus(app, db, { benutzer, kontext, anwendung });
+    });
+    reply.header('Cache-Control', 'no-store');
+    return ausliefern(reply, out, web);
+  });
+
+  /* ---------- /v2: Kontext wechseln (Verein oder Verband, FR-15); liegt beim Altcode, weil es Tokens ausstellt ---------- */
+  app.post('/v2/auth/kontext-wechseln', {
+    errorHandler: v2Fehler,
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['art', 'id'],
+        properties: { art: { type: 'string', enum: ['verein', 'verband'] }, id: { type: 'string', format: 'uuid' } },
+      },
+    },
+  }, async (req, reply) => {
+    const claims = await pruefeBearer(app, req);
+    if (claims.geraet_id) throw badRequest('Geräte-Anmeldungen sind an einen Verein gebunden – am Gerät neu anmelden', 'geraet_gebunden');
+    const anwendung = await ladeAnwendung(pool, claims.azp);
+    const benutzer = await ladeBenutzerFuerKontext(pool, claims.sub);
+    const { art } = req.body; const id = req.body.id.toLowerCase();
+    const web = !!cookieLesen(req);
+    const out = await tx(pool, async (db) => {
+      let kontext;
+      if (art === 'verband') kontext = await ladeVerbandskontext(db, benutzer, id);
+      else {
+        kontext = await ladeKontext(db, benutzer, id).catch((e) => {
+          if (e.status === 403) return null;
+          throw e;
+        });
+      }
+      if (!kontext) throw notFound();
+      // Nur eine noch offene Sitzung darf wechseln: ein abgemeldetes Token eröffnet keine neue
+      const offen = await widerrufeFamilie(db, claims.sid);
+      if (!offen.rowCount) throw unauthorized('Abgemeldet', 'abgemeldet');
       return stelleAus(app, db, { benutzer, kontext, anwendung });
     });
     reply.header('Cache-Control', 'no-store');

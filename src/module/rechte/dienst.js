@@ -44,3 +44,10 @@ export async function katalogLesen(ctx, db) {
   if (!ctx.rechte.super_admin && !ctx.rechte.verbandsrollen.length && ctx.rechte.rolle !== 'admin') throw notFound();
   return { rechte: KATALOG, rollen: await daten.systemrollen(db) };
 }
+
+/** Wirksame Rollenschlüssel und Berechtigungen im aktiven Kontext (FR-16). Das Ist-Recht `pruefer` wird Lizenz, keine Rolle. */
+export async function wirksameBerechtigungen(ctx, db) {
+  const { rolle, rechte, verbandsrollen } = ctx.rechte;
+  const rollen = [...new Set([...(rolle ? [rolle] : []), ...rechte.filter((r) => r !== 'pruefer'), ...verbandsrollen.map((r) => r.rolle)])].sort();
+  return { rollen, berechtigungen: [...new Set([...BASISRECHTE, ...await daten.berechtigungen(db, rollen)])].sort() };
+}

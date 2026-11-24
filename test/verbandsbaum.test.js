@@ -1,7 +1,7 @@
 // Story 1.4 (FR-1): Verbandsbaum
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { gibRolle, verband, verbandsbaum, verein } from './fabrik.js';
+import { gibRolle, verband, verbandsbaum, verbandsToken, verein } from './fabrik.js';
 import { neueApp } from './helper.js';
 
 let t; let baum; let admin; let mitglied;
@@ -9,7 +9,7 @@ beforeAll(async () => {
   t = await neueApp();
   baum = await verbandsbaum(t.pool);
   await gibRolle(t.pool, 'trainer1', 'djb_admin', baum.djb);
-  admin = (await t.login('trainer1')).body.access_token;
+  admin = await verbandsToken(t, 'trainer1', baum.djb);
   mitglied = (await t.login('admin1')).body.access_token; // Vereins-Admin, aber kein Verbands-Admin
 });
 afterAll(() => t.schliessen());
@@ -98,7 +98,7 @@ describe('Rechte', () => {
     const vorher = (await q('select count(*) from audit_log'))[0].count;
     expect(await versuche(mitglied)).toEqual([404, 404, 404, 404]);
     await gibRolle(t.pool, 'pruefer1', 'lv_admin', baum.lv);
-    expect(await versuche((await t.login('pruefer1')).body.access_token)).toEqual([404, 404, 404, 404]);
+    expect(await versuche(await verbandsToken(t, 'pruefer1', baum.lv))).toEqual([404, 404, 404, 404]);
     expect((await q('select count(*) from audit_log'))[0].count).toBe(vorher);
   });
   it('lässt den Super-Admin zu und beendet die Rolle sofort', async () => {

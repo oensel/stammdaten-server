@@ -1,7 +1,7 @@
 // Story 1.5 (FR-2): Verein wechselt den Verband
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { liegtUnter } from '../src/module/organisation/dienst.js';
-import { gibRolle, verband, verbandsbaum } from './fabrik.js';
+import { gibRolle, verband, verbandsbaum, verbandsToken } from './fabrik.js';
 import { neueApp } from './helper.js';
 
 let t; let a; let b; let token;
@@ -14,7 +14,7 @@ beforeAll(async () => {
   await gibRolle(t.pool, 'eltern1', 'lv_admin', b.lv);
   const c = await verbandsbaum(t.pool);
   await gibRolle(t.pool, 'schueler1', 'lv_admin', c.lv); // unbeteiligt
-  token = (await t.login('trainer1')).body.access_token;
+  token = await verbandsToken(t, 'trainer1', a.djb);
 });
 afterAll(() => t.schliessen());
 beforeEach(() => t.pool.query('delete from nachrichten; delete from mail_auftraege'));

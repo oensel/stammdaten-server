@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { conflict, fehler, forbidden, unauthorized } from './errors.js';
 import { signJwt, verifyJwt } from './jwt.js';
+import { ladeVerbandsrollen } from './module/rechte/dienst.js';
 import { neuesToken, sha256 } from './passwords.js';
 import { wirksameScopes } from './scopes.js';
 
@@ -57,7 +58,29 @@ export async function ladeKontext(db, benutzer, vereinId, { ohneWahl = false } =
 
 /** Benutzerzeile, wie sie ladeKontext braucht. */
 export const ladeBenutzerFuerKontext = async (db, id) =>
-  (await db.query('select id, ist_super_admin, heimatverein_id from benutzer where id = $1', [id])).rows[0];
+  (await db.query('select id, ist_super_admin, muss_passwort_aendern, heimatverein_id from benutzer where id = $1', [id])).rows[0];
+
+/**
+ * Verbandskontext (FR-15): nur wählbar, wenn der Benutzer dort eine aktive Rolle hat (sonst null). Vereinsrechte wirken darin nicht;
+ * die alten Claims bleiben leer.
+ */
+export async function ladeVerbandskontext(db, benutzer, verbandId) {
+  const rollen = (await ladeVerbandsrollen(null, db, { benutzer_id: benutzer.id })).filter((r) => r.verband_id === verbandId).map((r) => r.rolle).sort();
+  if (!rollen.length) return null;
+  return { verein_id: null, verband_id: verbandId, verbandsrollen: rollen, rolle: null, rechte: [], mitglied_id: null, mitglied_ids: [], super_admin: benutzer.ist_super_admin };
+}
+
+/** Startkontext ohne Vorgabe: Verein wie bisher; wer keinen Verein hat, startet im ersten Verband mit Rolle. */
+export async function ladeStartkontext(db, benutzer, vereinId, opt) {
+  try {
+    return await ladeKontext(db, benutzer, vereinId, opt);
+  } catch (e) {
+    if (e.code !== 'kein_verein') throw e;
+    const [erste] = (await ladeVerbandsrollen(null, db, { benutzer_id: benutzer.id })).sort((a, b) => a.verband_id.localeCompare(b.verband_id));
+    if (!erste) throw e;
+    return ladeVerbandskontext(db, benutzer, erste.verband_id);
+  }
+}
 
 /** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
 export const ladeMailAdresse = async (db, id) =>
@@ -132,7 +155,7 @@ export function baueAccessToken(app, { benutzer, kontext, anwendung, geraetId, s
   const cfg = app.cfg;
   const jetzt = Math.floor(Date.now() / 1000);
   const muss = benutzer.muss_passwort_aendern;
-  const scope = muss ? [] : wirksameScopes(
+  const scope = muss || (kontext.verband_id && !kontext.super_admin) ? [] : wirksameScopes(
     { rolle: kontext.rolle, rechte: kontext.rechte, superAdmin: kontext.super_admin }, anwendung.scopes);
   let vereine = muss ? {} : vereineInfo.vereine;
   let aud = muss ? [anwendung.schluessel] : vereineInfo.aud;
@@ -149,6 +172,7 @@ export function baueAccessToken(app, { benutzer, kontext, anwendung, geraetId, s
     sid, super_admin: kontext.super_admin, heimatverein_id: heimat, vereine, ...(gekuerzt ? { mitglied_ids_gekuerzt: true } : {}),
     verein_id: kontext.verein_id, rolle: kontext.rolle, rechte: kontext.rechte,
     scope: scope.join(' '), mitglied_id: kontext.mitglied_id, mitglied_ids: kontext.mitglied_ids,
+    ...(kontext.verband_id ? { kontext: { art: 'verband', id: kontext.verband_id }, verbandsrollen: kontext.verbandsrollen } : {}),
     ...(geraetId ? { geraet_id: geraetId } : {}), ...(muss ? { muss_passwort_aendern: true } : {}),
   };
   return { token: signJwt(claims, app.keys), claims };
@@ -160,9 +184,9 @@ export async function stelleAus(app, db, { benutzer, kontext, anwendung, sitzung
   const rt = neuesToken();
   const tage = art === 'geraet' ? cfg.geraetTokenTage : cfg.refreshTage;
   const ins = await db.query(
-    `insert into refresh_tokens (benutzer_id, anwendung_id, verein_id, geraet_id, familie_id, art, token_hash, laeuft_ab_am)
-     values ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(days => $8)) returning id`,
-    [benutzer.id, sitzungAnwendungId, kontext.verein_id, geraetId, familieId, art, sha256(rt), tage]);
+    `insert into refresh_tokens (benutzer_id, anwendung_id, verein_id, geraet_id, familie_id, art, token_hash, laeuft_ab_am, verband_id)
+     values ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(days => $8), $9) returning id`,
+    [benutzer.id, sitzungAnwendungId, kontext.verein_id, geraetId, familieId, art, sha256(rt), tage, kontext.verband_id ?? null]);
   if (prevId) await db.query('update refresh_tokens set ersetzt_durch = $2 where id = $1', [prevId, ins.rows[0].id]);
   const vereineInfo = benutzer.muss_passwort_aendern ? undefined : await ladeVereineMap(db, benutzer);
   const { token, claims } = baueAccessToken(app, { benutzer, kontext, anwendung, geraetId, sid: familieId, vereineInfo });
@@ -230,12 +254,14 @@ export async function rotiere(app, refreshToken, { clientId = null, vereinId = n
   let kontext;
   const ohneWahl = !rt.geraet_id; // Web: kein Pflicht-Verein, die App wählt aus dem Token
   try {
-    kontext = await ladeKontext(pool, benutzer, vereinId || rt.verein_id, { ohneWahl });
+    // Verbandskontext: bleibt, solange die Rolle besteht; sonst zurück zum Startkontext
+    kontext = (!vereinId && rt.verband_id && await ladeVerbandskontext(pool, benutzer, rt.verband_id))
+      || await ladeStartkontext(pool, benutzer, vereinId || rt.verein_id, { ohneWahl });
   } catch (e) {
     if (e.status !== 403 && e.status !== 409) throw e;
     if (vereinId) throw e; // ?verein= gehört der Person nicht: Anfrage ablehnen, Anmeldung bleibt bestehen
     if (!rt.geraet_id) { // gemerkter Verein nicht mehr gültig → Heimatverein/erster Verein
-      try { kontext = await ladeKontext(pool, benutzer, null, { ohneWahl }); } catch { /* unten */ }
+      try { kontext = await ladeStartkontext(pool, benutzer, null, { ohneWahl }); } catch { /* unten */ }
     }
     if (!kontext) throw await beenden('Zugang zum Verein nicht mehr gültig', 'kein_zugang_zum_verein');
   }

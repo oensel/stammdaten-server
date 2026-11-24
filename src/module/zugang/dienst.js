@@ -1,7 +1,7 @@
 import { inTransaktion } from '../../db.js';
 import { conflict, fehler, notFound } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
-import { beendeDirektrechte, verlange } from '../rechte/dienst.js';
+import { beendeDirektrechte, ladeVerbandsrollen, verlange, wirksameBerechtigungen } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 /** FR-14: eigene Zugehörigkeit zu einem Verein anfragen. Rechte wirken erst nach der Freigabe. */
@@ -49,4 +49,18 @@ export function zugehoerigkeitEntscheiden(ctx, db, { verein_id, id, version, ent
     await audit.schreiben(ctx, c, { aktion, objekt_art: 'vereinszugehoerigkeit', objekt_id: id, alt: bild(alt), neu: bild(neu), grund });
     return neu;
   });
+}
+
+/** FR-16: Rechtedetails des aktiven Kontexts und wählbare Kontexte; das Token trägt nur die Kurzform. */
+export async function ichLesen(ctx, db) {
+  const verbaende = {};
+  for (const r of await ladeVerbandsrollen(ctx, db, { benutzer_id: ctx.benutzer.id })) (verbaende[r.verband_id] ??= []).push(r.rolle);
+  return {
+    benutzer_id: ctx.benutzer.id, kontext: ctx.kontext, super_admin: ctx.rechte.super_admin,
+    ...await wirksameBerechtigungen(ctx, db),
+    kontexte: {
+      vereine: await daten.freigegebeneVereine(db, ctx.benutzer.id),
+      verbaende: Object.entries(verbaende).map(([id, rollen]) => ({ id, rollen: rollen.sort() })),
+    },
+  };
 }

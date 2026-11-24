@@ -102,7 +102,7 @@ export function pruefe({ dateien, eigentum, bekannt, altdateien = [] }) {
     if (modul && !(modul in PFEILE)) melde('unbekanntes_modul', datei, modul);
 
     const erlaubt = modul ? [...(PFEILE[modul] || []), ...(BLATT.includes(modul) ? [] : BLATT)]
-      : pipeline ? PIPELINE : datei === 'src/worker.js' ? WORKER : datei === 'src/app.js' ? Object.keys(PFEILE) : [];
+      : pipeline ? PIPELINE : datei === 'src/worker.js' ? WORKER : datei === 'src/auth.js' ? PFEILE.zugang /* Altcode von zugang */ : datei === 'src/app.js' ? Object.keys(PFEILE) : [];
     const oeffentlich = datei === 'src/app.js' ? 'routen.js' : 'dienst.js';
     for (const imp of importe(quelle)) {
       if (!imp.startsWith('.')) continue;

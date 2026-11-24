@@ -1,6 +1,9 @@
 const SPALTEN = 'bv.id, bv.benutzer_id, bv.verein_id, bv.rolle, bv.status, bv.change_seq';
 const eine = async (db, sql, p) => (await db.query(sql, p)).rows[0];
 
+export const freigegebeneVereine = async (db, benutzerId) => (await db.query(
+  `select verein_id from benutzer_vereine where benutzer_id = $1 and status = 'freigegeben' and geloescht_am is null order by 1`, [benutzerId])).rows.map((r) => r.verein_id);
+
 /** Neue Anfrage; eine abgelehnte oder entfernte Zugehörigkeit lebt als reine Mitglied-Anfrage wieder auf. Sonst undefined. */
 export const anfragen = (db, { benutzerId, vereinId }) => eine(db,
   `insert into benutzer_vereine as bv (benutzer_id, verein_id, status, angefragt_ueber, geaendert_von)

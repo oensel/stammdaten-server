@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { fristFuer } from '../src/module/organisation/dienst.js';
-import { gibRolle, verbandsbaum } from './fabrik.js';
+import { gibRolle, verbandsbaum, verbandsToken } from './fabrik.js';
 import { neueApp } from './helper.js';
 
 const ART = 'lehrgangsfreigabe_erinnerung';
@@ -13,7 +13,9 @@ beforeAll(async () => {
   a = await verbandsbaum(t.pool); b = await verbandsbaum(t.pool);
   await gibRolle(t.pool, 'trainer1', 'djb_admin', a.djb);
   await gibRolle(t.pool, 'pruefer1', 'lv_admin', a.lv);
-  [djb, lv, mitglied] = await Promise.all(['trainer1', 'pruefer1', 'admin1'].map(async (n) => (await t.login(n)).body.access_token));
+  djb = await verbandsToken(t, 'trainer1', a.djb);
+  lv = await verbandsToken(t, 'pruefer1', a.lv);
+  mitglied = (await t.login('admin1')).body.access_token;
 });
 afterAll(() => t.schliessen());
 
