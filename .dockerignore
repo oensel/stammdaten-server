@@ -1,0 +1,5 @@
+node_modules
+.pgdata-dev
+.env
+.env.prod
+test

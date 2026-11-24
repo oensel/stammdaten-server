@@ -1,0 +1,11 @@
+node_modules/
+.pgdata/
+.pgdata-dev/
+.env
+.env.prod
+.env.*
+!.env.example
+.pgdata*/
+*.dump
+hajime-abzug*/
+abzug/
