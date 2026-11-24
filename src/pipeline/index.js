@@ -2,7 +2,7 @@
 import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, pruefeBearer } from '../auth.js';
 import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
-import { ladeVerbandsrollen } from '../module/rechte/dienst.js';
+import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
 import { baueCtx, systemCtx } from './ctx.js';
 
 const UUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -36,7 +36,9 @@ async function ladeCtx(app, req) {
   if (!gewaehlt && claims.kontext?.art === 'verband') {
     const verbandsrollen = alleVerbandsrollen.filter((r) => r.verband_id === claims.kontext.id);
     if (!verbandsrollen.length) throw notFound();
-    return baueCtx({ ...basis, kontext: Object.freeze({ art: 'verband', id: claims.kontext.id }), rechte: { verbandsrollen, super_admin: benutzer.ist_super_admin } });
+    const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
+    const quellen = await ladeQuellen(null, app.pool, { kontext, verbandsrollen });
+    return baueCtx({ ...basis, kontext, rechte: { quellen, verbandsrollen, super_admin: benutzer.ist_super_admin } });
   }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
@@ -49,9 +51,11 @@ async function ladeCtx(app, req) {
     if (e.status === 403) throw notFound();
     throw e;
   }
+  const kontext = Object.freeze({ art: 'verein', id: k.verein_id });
   return baueCtx({
-    ...basis, kontext: Object.freeze({ art: 'verein', id: k.verein_id }),
+    ...basis, kontext,
     rechte: {
+      quellen: await ladeQuellen(null, app.pool, { kontext, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
     },

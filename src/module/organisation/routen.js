@@ -39,4 +39,6 @@ export default function routen(v2) {
     schema: { params: objekt({ id: uuid, art: { type: 'string', maxLength: 60 } }, ['id', 'art']), body: objekt({ wert: { type: 'integer', minimum: 1, maximum: 1000 } }, ['wert']) },
     handler: (ctx, db, { params, body }) => dienst.fristSetzen(ctx, db, { verband_id: params.id, art: params.art, wert: body.wert }),
   });
+  v2({ method: 'GET', url: '/vereine', handler: (ctx, db) => dienst.vereineLesen(ctx, db) });
+  v2({ method: 'GET', url: '/vereine/:id', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.vereinLesen(ctx, db, params) });
 }
