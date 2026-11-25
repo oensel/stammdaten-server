@@ -49,15 +49,26 @@ export default async function authRoutes(app) {
         order by (lower(benutzername) = lower($1)) desc limit 1`, [kennung.trim()])).rows[0];
 
   /** Fehlversuch zählen; nach maxFehlversuchen Sperre. Ein einziges UPDATE – auch bei parallelen Anfragen korrekt. */
-  async function fehlversuch(u) {
+  async function buche(u) {
     const r = await pool.query(
       `update benutzer set
          gesperrt_bis = case when fehlversuche + 1 >= $2 then now() + make_interval(mins => $3) else gesperrt_bis end,
          fehlversuche = case when fehlversuche + 1 >= $2 then 0 else fehlversuche + 1 end
-       where id = $1 returning gesperrt_bis > now() as gesperrt`,
+       where id = $1 and (gesperrt_bis is null or gesperrt_bis <= now()) returning gesperrt_bis > now() as gesperrt`,
       [u.id, cfg.maxFehlversuche, cfg.sperreMinuten]);
-    if (r.rows[0]?.gesperrt) throw tooMany(`Zu viele Fehlversuche – Zugang für ${cfg.sperreMinuten} Min. gesperrt`, { gesperrt_minuten: cfg.sperreMinuten });
+    return r.rows[0]; // undefined: schon gesperrt
+  }
+  function abweisen(b) {
+    if (!b || b.gesperrt) throw tooMany(`Zu viele Fehlversuche – Zugang für ${cfg.sperreMinuten} Min. gesperrt`, { gesperrt_minuten: cfg.sperreMinuten });
     throw unauthorized(FALSCH, 'anmeldung_fehlgeschlagen');
+  }
+
+  const fehlversuch = async (u) => abweisen(await buche(u));
+  /** Zweiter Faktor: der Versuch ist vor der Prüfung gebucht, damit parallele Anfragen die Sperre nicht überholen. */
+  async function buchenVorPruefung(u) {
+    const b = await buche(u);
+    if (!b) abweisen(b);
+    return b;
   }
 
   /** Gerät registrieren bzw. wiederverwenden (gehört dem Benutzer; Vereinsgeräte legt ein Admin an – später). */
@@ -80,8 +91,10 @@ export default async function authRoutes(app) {
       [kontext.verein_id, anwendung.id, benutzer.id, name, typ])).rows[0].id;
   }
 
-  async function melde({ benutzer, vereinId, anwendung, geraet, geraetToken, web = false }) {
+  async function melde({ benutzer, vereinId, anwendung, geraet, geraetToken, web = false, gebucht = null, code = null }) {
     return tx(pool, async (db) => {
+      // in dieser Transaktion: scheitert die Anmeldung danach (z. B. 409 Vereinswahl), bleibt der Code gültig
+      if (gebucht && !await mfa.pruefen(benutzer.id, code, db)) abweisen(gebucht);
       // SSO: Web-Anmeldung ohne Pflicht-Vereinswahl (die App wählt aus `vereine` im Token); Geräte bleiben an einen Verein gebunden
       const kontext = await ladeKontext(db, benutzer, vereinId, { ohneWahl: web && !geraet });
       const geraetId = await geraetFuer(db, { benutzer, kontext, anwendung, geraet });
@@ -89,22 +102,22 @@ export default async function authRoutes(app) {
       await db.query(
         'update benutzer set fehlversuche = 0, pin_fehlversuche = 0, gesperrt_bis = null, letzte_anmeldung_am = now() where id = $1', [benutzer.id]);
       if (geraetId) await db.query('update geraete set letzter_sync_am = now() where id = $1', [geraetId]);
-      return stelleAus(app, db, { benutzer, kontext, anwendung, geraetId, art: geraetToken ? 'geraet' : 'normal' });
+      return stelleAus(app, db, { benutzer, kontext, anwendung, geraetId, art: geraetToken ? 'geraet' : 'normal', mfa: !!gebucht });
     });
   }
 
   /* ---------- Zweiter Faktor des Super-Admins (Story 2.9, NFR-16) ---------- */
   const MFA_AUD = 'stammdaten-2fa';
   const einrichtungsToken = (u) => signJwt(
-    { iss: cfg.issuer, aud: MFA_AUD, sub: u.id, exp: Math.floor(Date.now() / 1000) + 600 }, app.keys, 'mfa+jwt');
+    { iss: cfg.issuer, aud: MFA_AUD, sub: u.id, pw: sha256(u.passwort_hash), exp: Math.floor(Date.now() / 1000) + 600 }, app.keys, 'mfa+jwt');
 
   const mfa = zweiterFaktor(pool, cfg);
-  const zweitenFaktorPruefen = (u, eingabe) => mfa.pruefen(u.id, eingabe);
 
   const mfaBenutzer = async (token) => {
-    const p = verifyJwt(token, app.keys, { aud: MFA_AUD, iss: cfg.issuer });
+    const p = verifyJwt(token, app.keys, { aud: MFA_AUD, iss: cfg.issuer, typ: 'mfa+jwt' });
     const u = p && await mfa.benutzer(p.sub);
-    if (!u?.ist_super_admin) throw unauthorized('Einrichtungs-Token ungültig oder abgelaufen', 'einrichtung_abgelaufen');
+    // ein Passwortwechsel entwertet das Token
+    if (!u?.ist_super_admin || p.pw !== sha256(u.passwort_hash || '')) throw unauthorized('Einrichtungs-Token ungültig oder abgelaufen', 'einrichtung_abgelaufen');
     if (u.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
     return u;
   };
@@ -123,8 +136,10 @@ export default async function authRoutes(app) {
   }, async (req, reply) => {
     const u = await mfaBenutzer(req.body.einrichtungs_token);
     if (u.totp_aktiv_am) throw conflict('Der zweite Faktor ist schon eingerichtet', 'zweiter_faktor_vorhanden');
+    if (!u.gestartet) throw conflict('Zuerst die Einrichtung starten', 'einrichtung_nicht_gestartet');
+    const b = await buchenVorPruefung(u);
     const codes = await mfa.bestaetigen(u, req.body.code);
-    if (!codes) return fehlversuch(u); // zählt wie ein falsches Passwort, sonst ließe sich der Code durchprobieren
+    if (!codes) return abweisen(b); // zählt wie ein falsches Passwort, sonst ließe sich der Code durchprobieren
     reply.header('Cache-Control', 'no-store');
     return { backup_codes: codes };
   });
@@ -137,7 +152,8 @@ export default async function authRoutes(app) {
     const u = await mfa.benutzer(claims.sub);
     if (!u?.ist_super_admin || !u.totp_aktiv_am) throw forbidden('Kein zweiter Faktor eingerichtet', 'kein_zweiter_faktor');
     if (u.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
-    if (!await mfa.pruefen(u.id, req.body.code)) return fehlversuch(u);
+    const b = await buchenVorPruefung(u);
+    if (!await mfa.pruefen(u.id, req.body.code)) return abweisen(b);
     reply.header('Cache-Control', 'no-store');
     return { backup_codes: await mfa.neueBackupCodes(u.id) };
   });
@@ -166,13 +182,14 @@ export default async function authRoutes(app) {
     if (!u) { await verifyDummy(passwort); throw unauthorized(FALSCH, 'anmeldung_fehlgeschlagen'); }
     if (u.gesperrt) throw tooMany(`Zu viele Fehlversuche – bitte in ${u.min} Min. erneut versuchen`, { gesperrt_minuten: u.min });
     if (!(await verifySecret(u.passwort_hash, passwort))) return fehlversuch(u);
+    let gebucht = null;
     if (cfg.zweiFaktorPflicht && u.ist_super_admin) {
       // Ohne eingerichteten zweiten Faktor gibt es keine Sitzung, nur den Weg zur Einrichtung
       if (!u.totp_aktiv_am) return { zweiter_faktor: 'einrichten', einrichtungs_token: einrichtungsToken(u) };
-      if (!await zweitenFaktorPruefen(u, req.body.code)) return fehlversuch(u);
+      gebucht = await buchenVorPruefung(u);
     }
     const web = req.body.client_typ === 'web';
-    return ausliefern(reply, await melde({ benutzer: u, vereinId, anwendung, geraet, geraetToken, web }), web);
+    return ausliefern(reply, await melde({ benutzer: u, vereinId, anwendung, geraet, geraetToken, web, ...(gebucht ? { gebucht, code: req.body.code } : {}) }), web);
   });
 
   /* ---------- PIN-Anmeldung am registrierten Gerät (online) ---------- */

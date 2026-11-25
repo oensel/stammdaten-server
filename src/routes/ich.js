@@ -1,7 +1,7 @@
 // Eigenes Konto: GET/PATCH/DELETE /ich
 import { tx } from '../db.js';
 import { badRequest, conflict, forbidden, unauthorized } from '../errors.js';
-import { auditiere, ladeBenutzerObjekt, pruefeBearer, widerrufeAlle } from '../auth.js';
+import { auditiere, beendeKontorechte, ladeBenutzerObjekt, pruefeBearer, widerrufeAlle } from '../auth.js';
 import { erzeugeEinmalToken, link } from '../einmal.js';
 import { PIN_RE, PW_MAX, hashSecret, pruefeNeuesPasswort, verifySecret } from '../passwords.js';
 
@@ -122,6 +122,7 @@ export default async function ichRoutes(app) {
       await db.query(
         `update benutzer set geloescht_am = now(), aktiv = false, passwort_hash = null, pin_hash = null, geaendert_am = now() where id = $1`, [u.id]);
       await db.query(`update benutzer_vereine set geloescht_am = now() where benutzer_id = $1 and geloescht_am is null`, [u.id]);
+      await beendeKontorechte(db, claims);
       await auditiere(db, claims, { aktion: 'recht_entzogen', objekt_art: 'benutzer', objekt_id: u.id, grund: 'Konto selbst gelöscht' });
       await widerrufeAlle(db, u.id);
     });

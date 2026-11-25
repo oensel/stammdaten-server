@@ -184,7 +184,7 @@ export default async function mitgliederRoutes(app) {
     const { claims } = await fotoZugriff(req, true);
     await pool.query(
       `update dokumente set inhalt = null, groesse = 0, geloescht_am = now(), geaendert_am = now(), geaendert_von = $2
-        where person_id = (select person_id from mitglieder where id = $1) and art = 'passfoto' and geloescht_am is null`, [req.params.id, claims.sub]);
+        where person_id = (select person_id from mitglieder where id = $1) and art = 'passfoto' and (geloescht_am is null or inhalt is not null)`, [req.params.id, claims.sub]);
     return reply.code(204).send();
   });
 }

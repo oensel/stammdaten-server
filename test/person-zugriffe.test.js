@@ -13,7 +13,7 @@ beforeEach(async () => {
   baum = await verbandsbaum(t.pool);
   jc = (await q(`select id from vereine where name = 'JC Demo'`))[0].id;
   await q('update vereine set verband_id = $2 where id = $1', [jc, baum.kreis]);
-  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben}'`, [CLIENT]);
+  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben,mitglieder:kontakt}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben,mitglieder:kontakt}'`, [CLIENT]);
   lena = (await q(`select id from personen where vorname = 'Lena'`))[0].id;
   id = Object.fromEntries((await q('select benutzername, id from benutzer')).map((b) => [b.benutzername, b.id]));
   // oma gehört nur zu einem fremden Verein
@@ -132,6 +132,35 @@ it('Widerruf und Altweg (/v1) laufen nicht auseinander', async () => {
   await erteile('admin1', 'eltern1', { art: 'erziehungsberechtigt', umfang: 'aendern' });
   await q('update erziehungsberechtigte set geloescht_am = now()');
   expect(await elternZugriff()).toBe(undefined);
+});
+
+it('Apps ohne Kontakt- und Schreib-Scope bekommen keine Kontaktdaten und ändern keine Zugriffe', async () => {
+  const z = (await erteile('admin1', 'oma')).body.id;
+  await q(`update anwendungen set scopes = array_remove(array_remove(scopes, 'mitglieder:kontakt'), 'mitglieder:schreiben') where schluessel = $1`, [CLIENT]);
+  for (const wer of ['admin1', 'oma', 'schueler1']) {
+    const r = await lesen(wer);
+    expect(r.status).toBe(200);
+    expect(r.body).not.toHaveProperty('email');
+    expect(r.body).not.toHaveProperty('strasse');
+  }
+  expect((await erteile('admin1', 'pruefer1')).status).toBe(404);
+  expect((await entziehe('oma', z)).status).toBe(404);
+});
+
+it('am Gerät (PIN) wirken weder Zugriff noch eigene Person', async () => {
+  await erteile('admin1', 'oma');
+  const { body } = await t.login('oma', { geraet: { typ: 'tablet' }, geraet_token: true });
+  expect(body.geraet_id).toBeTruthy();
+  expect((await t.api('GET', url(), null, body.access_token)).status).toBe(404);
+  expect((await t.api('GET', '/v2/ich/personen', null, body.access_token)).body.personen).toEqual([]);
+});
+
+it('Migration 029 widerruft übernommene Zugriffe ohne freigegebene Zugehörigkeit', async () => {
+  await q('delete from personen_zugriffe');
+  await q(`insert into personen_zugriffe (person_id, benutzer_id, art, umfang, erteilt_am) values ($1,$2,'erziehungsberechtigt','aendern',now()), ($1,$3,'erziehungsberechtigt','aendern',now())`, [lena, id.eltern1, id.oma]);
+  const sql = await readFile('db/migrations/029_review_2_5_bis_3_4.sql', 'utf8');
+  await q(sql.slice(sql.indexOf('update personen_zugriffe')));
+  expect(await q('select benutzer_id from personen_zugriffe where widerrufen_am is null')).toEqual([{ benutzer_id: id.eltern1 }]);
 });
 
 it('Migration 027 übernimmt Eltern aus dem Altweg nur vom Heimatverein und nur mit Geburtsdatum', async () => {

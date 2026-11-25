@@ -43,9 +43,10 @@ const zugriffWirkt = (person, z, tag) => !!z && !!person.geburtsdatum && (!minde
  */
 async function zieleFuer(ctx, db, person) {
   const ms = await daten.mitgliedschaften(db, person.id);
-  const selbst = person.benutzer_id === ctx.benutzer.id;
+  // Am Gerät (PIN) gibt es keine Rechte als Person oder mit Zugriff: sie gälten über den Verein des Geräts hinaus
+  const selbst = !ctx.rechte.geraet && person.benutzer_id === ctx.benutzer.id;
   const tag = heute(ctx);
-  const gefunden = selbst ? null : await daten.zugriffFuer(db, { personId: person.id, benutzerId: ctx.benutzer.id });
+  const gefunden = selbst || ctx.rechte.geraet ? null : await daten.zugriffFuer(db, { personId: person.id, benutzerId: ctx.benutzer.id });
   const zugriff = zugriffWirkt(person, gefunden, tag) ? gefunden : null;
   const vereine = [...new Set([person.heimatverein_id, ...ms.filter((m) => m.status !== 'ausgetreten').map((m) => m.verein_id)])];
   const basis = { heimatverein_id: person.heimatverein_id, person: { aktiv: ms.some((m) => m.status === 'aktiv'), rang: null, lizenzen: [] } };
@@ -114,6 +115,8 @@ async function schreibe(db, fn) {
   }
 }
 
+const appSchreibt = (ctx) => ctx.rechte.app_scopes.includes('mitglieder:schreiben');
+
 /** In welcher Eigenschaft verwaltet der Benutzer die Zugriffe? 'heimat' | 'person' | 'eltern' | null. */
 function verwaltetAls(ctx, person, z) {
   if (z.selbst && mindestens(person, 18, heute(ctx))) return 'person';
@@ -126,7 +129,7 @@ function verwaltetAls(ctx, person, z) {
 /** Die übrigen Erziehungsberechtigten erfahren von jeder Änderung. */
 async function meldeZugriff(ctx, c, person, art, ausser) {
   const empfaenger = (await daten.zugriffeVon(c, person.id))
-    .filter((x) => x.art === 'erziehungsberechtigt' && !ausser.includes(x.benutzer_id)).map(({ benutzer_id }) => ({ benutzer_id }));
+    .filter((x) => x.art === 'erziehungsberechtigt' && zugriffWirkt(person, x, heute(ctx)) && !ausser.includes(x.benutzer_id)).map(({ benutzer_id }) => ({ benutzer_id }));
   await benachrichtigung.senden(ctx, c, { empfaenger, art, daten: { vorname: person.vorname } });
 }
 
@@ -134,7 +137,7 @@ export const zugriffErteilen = (ctx, db, { id, benutzer_id, art, umfang }) => sc
   const person = await daten.personSperren(c, id);
   const z = await mitZielen(ctx, c, person);
   const als = verwaltetAls(ctx, person, z);
-  if (!als) throw notFound();
+  if (!als || !appSchreibt(ctx)) throw notFound();
   if (als === 'eltern' && (art !== 'bevollmaechtigt' || umfang !== 'lesen')) throw fehler(422, 'Dritten darfst du nur Lesezugriff geben', 'nur_lesezugriff');
   if (benutzer_id === ctx.benutzer.id) throw fehler(422, 'Dir selbst kannst du keinen Zugriff geben', 'selbsterteilung');
   // Ab 18 wirkt ein Zugriff nur mit Freischaltung durch die Person selbst, je ein Jahr (E103)
@@ -155,7 +158,7 @@ export async function zugriffeLesen(ctx, db, { id }) {
 /** Heimatverein und volljährige Person beenden jeden Zugriff, Eltern die Zugriffe Dritter, jeder seinen eigenen. */
 export const zugriffEntziehen = (ctx, db, { id, zugriff_id, grund = null }) => schreibe(db, async (c) => {
   const person = await daten.personSperren(c, id);
-  if (!person) throw notFound();
+  if (!person || ctx.rechte.geraet || !appSchreibt(ctx)) throw notFound();
   const z = await zieleFuer(ctx, c, person);
   const alt = await daten.zugriffSperren(c, { id: zugriff_id, personId: id });
   if (!alt) throw notFound();
@@ -192,9 +195,10 @@ async function dokumentRechte(ctx, db, person) {
   const ziel = { ...z.aendern, eigen_kontakt: false };
   const verwalten = imHeimatverein && darfFelder(c, 'mitglieder:AENDERN', 'person', ['vorname', 'email'], ziel);
   const r = {
-    alle: eigen || verwalten,
+    // Nachweise und Scans enthalten Kontaktdaten: nur für Apps, die sie sehen dürfen
+    alle: (eigen || verwalten) && ctx.rechte.app_scopes.includes('mitglieder:kontakt'),
     passfoto: eigen || verwalten || (imHeimatverein && darf(c, 'mitglieder:LESEN', { ...ziel, eigen: false })),
-    schreiben: verwalten || (z.selbst && eigen && mindestens(person, 14, heute(ctx))),
+    schreiben: appSchreibt(ctx) && (verwalten || (z.selbst && eigen && mindestens(person, 14, heute(ctx)))),
   };
   if (!r.passfoto) throw notFound();
   return r;

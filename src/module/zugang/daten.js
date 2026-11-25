@@ -63,7 +63,7 @@ export async function mitgliedsbezuegeBeenden(db, { benutzerId, vereinId, jetzt 
 
 /** Konto zur Anmeldung mit Passwort (Benutzername oder E-Mail), mit Sperrzustand. */
 export const kontoFuerAnmeldung = (db, { kennung, jetzt }) => eine(db,
-  `select id, passwort_hash, coalesce(gesperrt_bis > $2, false) as gesperrt from benutzer
+  `select id, passwort_hash, ist_super_admin, coalesce(gesperrt_bis > $2, false) as gesperrt from benutzer
     where (lower(benutzername) = lower($1) or lower(email) = lower($1)) and aktiv and geloescht_am is null
     order by (lower(benutzername) = lower($1)) desc limit 1`, [kennung, jetzt]);
 export const fehlversuch = (db, { id, max, sperreBis }) => db.query(
@@ -71,9 +71,12 @@ export const fehlversuch = (db, { id, max, sperreBis }) => db.query(
           fehlversuche = case when fehlversuche + 1 >= $2 then 0 else fehlversuche + 1 end where id = $1`, [id, max, sperreBis]);
 export const fehlversucheZuruecksetzen = (db, id) => db.query('update benutzer set fehlversuche = 0 where id = $1', [id]);
 
+/** Nur nach bestandenem zweiten Faktor: auch die eigene Buchung kann gesperrt haben. */
+export const sperreAufheben = (db, id) => db.query('update benutzer set fehlversuche = 0, gesperrt_bis = null where id = $1', [id]);
+
 // ---- Zweiter Faktor (Story 2.9) ----
 export const mfaBenutzer = (db, { id, jetzt }) => eine(db,
-  `select id, benutzername, ist_super_admin, totp_aktiv_am, gesperrt_bis > $2 as gesperrt
+  `select id, benutzername, passwort_hash, ist_super_admin, totp_aktiv_am, totp_secret_verschluesselt is not null as gestartet, gesperrt_bis > $2 as gesperrt
      from benutzer where id = $1 and aktiv and geloescht_am is null`, [id, jetzt]);
 
 export const totpGeheimnisLesen = async (db, id) => (await eine(db, 'select totp_secret_verschluesselt as wert from benutzer where id = $1', [id]))?.wert ?? null;
