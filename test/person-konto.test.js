@@ -29,6 +29,8 @@ const url = (x = '') => `/v2/personen/${lena}${x}`;
 const konto = async (wer) => t.api('POST', url('/konto'), { benutzername: 'lena.neu' }, await tok(wer));
 const ablegen = async (wer) => (await t.app.inject({ method: 'POST', url: url('/dokumente?art=vormundschaftsnachweis'), payload: PDF, headers: { authorization: `Bearer ${await tok(wer)}`, 'content-type': 'application/pdf' } })).json().id;
 const erteile = async (wer, b) => t.api('POST', url('/zugriffe'), { umfang: 'lesen', ...b }, await tok(wer));
+const NEU = 'noch-ein-neues-Passwort-88';
+const bestaetige = (token) => t.api('POST', '/v2/auth/konto-bestaetigen', { token, passwort_neu: NEU });
 const linkToken = () => /#token=(\S+)/.exec(mails.at(-1).text)[1];
 /** Anmelden mit Startpasswort, eigenes setzen, neu anmelden. */
 async function uebernehmen(name, start) {
@@ -56,7 +58,7 @@ it('mit fremdem Startpasswort gibt es Personenrechte erst nach der Bestätigung'
   await ohneKonto();
   await ablegen('admin1');
   const { body } = await konto('admin1');
-  const token = await uebernehmen('lena.neu', body.startpasswort);
+  let token = await uebernehmen('lena.neu', body.startpasswort);
   expect((await t.api('GET', url(), null, token)).status).toBe(200); // Lesen bleibt
   const docs = async () => (await t.api('GET', url('/dokumente'), null, token)).body.dokumente.length;
   expect(await docs()).toBe(0);
@@ -69,9 +71,14 @@ it('mit fremdem Startpasswort gibt es Personenrechte erst nach der Bestätigung'
   expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(202);
   expect(mails.at(-1).to).toBe('eltern@example.org');
   const l = linkToken();
-  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: `${l.slice(0, -1)}_` })).status).toBe(404);
-  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: l })).status).toBe(200);
-  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: l })).status).toBe(404);
+  expect((await bestaetige(`${l.slice(0, -1)}_`)).status).toBe(404);
+  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: l, passwort_neu: 'kurz' })).status).toBe(400);
+  expect((await bestaetige(l)).status).toBe(200);
+  expect((await bestaetige(l)).status).toBe(404);
+  // Passwort und Sitzung des Vergebenden gelten nicht weiter
+  expect((await t.login('lena.neu', {}, 'ein-ganz-eigenes-Passwort-77')).status).toBe(401);
+  expect(await q('select 1 from refresh_tokens where benutzer_id = $1 and widerrufen_am is null', [body.benutzer_id])).toEqual([]);
+  token = await tok('lena.neu', NEU);
   expect(await docs()).toBe(1);
   expect(await telefon()).toBe(200);
   expect((await q(`select 1 from audit_log where objekt_art = 'konto' and objekt_id = $1`, [body.benutzer_id])).length).toBe(1);
@@ -93,19 +100,70 @@ it('der Vergebende kann die Bestätigung nicht auf seine Adresse lenken; ohne si
   expect(mails.at(-1).to).toBe('echt@example.org');
   // ein neuer fremder Reset entwertet den offenen Link
   expect((await t.api('POST', `/benutzer/${body.benutzer_id}/passwort-zuruecksetzen`, null, await tok('admin1'))).status).toBe(200);
-  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: linkToken() })).status).toBe(404);
+  expect((await bestaetige(linkToken())).status).toBe(404);
 });
 
 it('nach dem Reset eines Elternkontos ruhen dessen Personenrechte bis zur Bestätigung an die alte Adresse', async () => {
   await ablegen('admin1');
   const { body } = await t.api('POST', `/benutzer/${id.eltern1}/passwort-zuruecksetzen`, null, await tok('trainer1'));
-  const token = await uebernehmen('eltern1', body.startpasswort);
+  let token = await uebernehmen('eltern1', body.startpasswort);
+  expect((await t.api('DELETE', url(`/zugriffe/${(await q('select id from personen_zugriffe'))[0].id}`), null, token)).status).toBe(404);
   expect((await t.api('GET', url('/dokumente'), null, token)).body.dokumente).toEqual([]);
   expect((await t.api('POST', url('/zugriffe'), { benutzer_id: id.pruefer1, art: 'bevollmaechtigt', umfang: 'lesen' }, token)).status).toBe(404);
   for (let i = 0; i < 3; i++) expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(202);
   expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(429);
-  expect((await t.api('POST', '/v2/auth/konto-bestaetigen', { token: linkToken() })).status).toBe(200);
+  expect((await bestaetige(linkToken())).status).toBe(200);
+  token = await tok('eltern1', NEU);
   expect((await t.api('GET', url('/dokumente'), null, token)).body.dokumente).toHaveLength(1);
+});
+
+it('ein zweiter Reset macht die Adresse des Vergebenden nicht sicher; nach der Bestätigung gilt wieder die alte', async () => {
+  const reset = async () => (await t.api('POST', `/benutzer/${id.eltern1}/passwort-zuruecksetzen`, null, await tok('trainer1'))).body.startpasswort;
+  let token = await uebernehmen('eltern1', await reset());
+  expect((await t.api('PATCH', '/ich', { email: 'trick@example.org' }, token)).status).toBe(200);
+  expect((await t.api('POST', '/auth/email-bestaetigen', { token: linkToken() })).status).toBe(200);
+  const start = await reset();
+  await t.api('PATCH', '/ich', { passwort_alt: start, passwort_neu: 'wieder-ein-anderes-Passwort-9' }, await tok('eltern1', start));
+  token = await tok('eltern1', 'wieder-ein-anderes-Passwort-9');
+  expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(202);
+  expect(mails.at(-1).to).toBe('eltern@example.org');
+  expect((await bestaetige(linkToken())).status).toBe(200);
+  expect(await q('select email from benutzer where id = $1', [id.eltern1])).toEqual([{ email: 'eltern@example.org' }]);
+});
+
+it('weder der anlegende Elternteil noch ein Zweitkonto des Vergebenden erhält den Link', async () => {
+  await ohneKonto();
+  await q('update personen set email = null where id = $1', [lena]);
+  const { body } = await konto('eltern1');
+  const token = await uebernehmen('lena.neu', body.startpasswort);
+  const fordere = async () => (await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).body.code;
+  expect(await fordere()).toBe('adresse_fehlt');
+  // Zweitkonto: vom Vergebenden berechtigt, mit bestätigter Adresse; auch als Setzer der Adresse der Person
+  await q(`update benutzer set email = 'zweit@example.org', email_bestaetigt_am = now() where id = $1`, [id.pruefer1]);
+  await q(`insert into personen_zugriffe (person_id, benutzer_id, art, umfang, erteilt_von, erteilt_am) values ($1,$2,'erziehungsberechtigt','aendern',$3,now())`, [lena, id.pruefer1, id.eltern1]);
+  expect(await fordere()).toBe('adresse_fehlt');
+  await q(`update personen set email = 'zweit@example.org', geaendert_von = $2 where id = $1`, [lena, id.pruefer1]);
+  expect(await fordere()).toBe('adresse_fehlt');
+});
+
+it('eine Einladung verknüpft die Person nur unbestätigt, außer die Adresse hat jemand anderes bei ihr hinterlegt', async () => {
+  await alter('2000-01-01');
+  await ohneKonto();
+  const lade = async (email, benutzername) => {
+    expect((await t.api('POST', '/einladungen', { email, mitglied_id: lenaM }, await tok('admin1'))).status).toBe(202);
+    expect((await t.api('POST', '/auth/einladung-annehmen', { token: linkToken(), benutzername, passwort_neu: NEU })).status).toBe(200);
+    return tok(benutzername, NEU);
+  };
+  const erteilen = async (token) => (await t.api('POST', url('/zugriffe'), { benutzer_id: id.pruefer1, art: 'bevollmaechtigt', umfang: 'lesen' }, token)).status;
+  await q(`update personen set email = 'trick@example.org', geaendert_von = $2 where id = $1`, [lena, id.admin1]);
+  let token = await lade('trick@example.org', 'lena.trick');
+  expect(await q('select benutzer_id from personen where id = $1', [lena])).toEqual(await q(`select id as benutzer_id from benutzer where benutzername = 'lena.trick'`));
+  expect(await erteilen(token)).toBe(404);
+  expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).body.code).toBe('adresse_fehlt');
+  await ohneKonto();
+  await q(`update personen set email = 'lena@example.org', geaendert_von = null where id = $1`, [lena]);
+  token = await lade('lena@example.org', 'lena.echt');
+  expect(await erteilen(token)).toBe(201);
 });
 
 it('Vormund nur durch den Heimatverein mit bestätigtem Nachweis', async () => {

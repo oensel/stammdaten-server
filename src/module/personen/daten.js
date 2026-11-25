@@ -34,6 +34,9 @@ export const zugriffFuer = (db, { personId, benutzerId }) => eine(db,
   `select ${ZUGRIFF} from personen_zugriffe where person_id = $1 and benutzer_id = $2 and widerrufen_am is null`, [personId, benutzerId]);
 export const zugriffeVon = async (db, personId) => (await db.query(
   `select ${ZUGRIFF} from personen_zugriffe where person_id = $1 and widerrufen_am is null order by erteilt_am, id`, [personId])).rows;
+/** Benutzer, denen einer der Genannten je einen Zugriff auf die Person erteilt hat. */
+export const zugriffeErteiltDurch = async (db, { personId, durch }) => (await db.query(
+  'select distinct benutzer_id from personen_zugriffe where person_id = $1 and erteilt_von = any($2::uuid[])', [personId, durch])).rows.map((r) => r.benutzer_id);
 export const zugriffSperren = (db, { id, personId }) => eine(db,
   `select ${ZUGRIFF} from personen_zugriffe where id = $1 and person_id = $2 and widerrufen_am is null for update`, [id, personId]);
 export const zugriffAnlegen = (db, z) => eine(db,
@@ -100,15 +103,17 @@ export const antragSperren = (db, id) => eine(db, `select ${ANTRAG} from mitglie
 export const antragLesen = (db, { id, vereinId }) => eine(db, `select ${ANTRAG} from mitgliedschaftsantraege where id = $1 and verein_id = $2`, [id, vereinId]);
 export const antraegeVon = async (db, { vereinId, status }) => (await db.query(
   `select ${ANTRAG} from mitgliedschaftsantraege where verein_id = $1 and ($2::text is null or status = $2) order by erstellt_am, id`, [vereinId, status])).rows;
-export const antraegeGestelltVon = async (db, benutzerId) => (await db.query(
-  `select ${ANTRAG} from mitgliedschaftsantraege where gestellt_von = $1 order by erstellt_am desc, id`, [benutzerId])).rows;
+export const antraegeFuer = async (db, { benutzerId, personIds }) => (await db.query(
+  `select ${ANTRAG} from mitgliedschaftsantraege where gestellt_von = $1 or person_id = any($2::uuid[]) order by erstellt_am desc, id`, [benutzerId, personIds])).rows;
 export const offeneAntraege = async (db) => (await db.query(`select id, verein_id from mitgliedschaftsantraege where status = 'offen' order by erstellt_am, id`)).rows;
 export const antragEntscheiden = (db, a) => eine(db,
-  `update mitgliedschaftsantraege set status = $2, person_id = $3, grund = $4, entschieden_von = $5, entschieden_am = $6, geaendert_von = $5, angaben = null
+  `update mitgliedschaftsantraege set status = $2, person_id = $3, grund = $4, entschieden_von = $5, entschieden_am = $6, geaendert_von = $5, angaben = null, judopass_nr = null
     where id = $1 returning ${ANTRAG}`, [a.id, a.status, a.personId, a.grund ?? null, a.von, a.jetzt]);
 export const antragErinnert = (db, { id, jetzt }) => db.query('update mitgliedschaftsantraege set erinnert_am = $2 where id = $1', [id, jetzt]);
 
 // ---- Austritt ----
+/** Je Verein nacheinander: zwei Admins können nicht gleichzeitig als jeweils vorletzter austreten. */
+export const austrittImVereinSperren = (db, vereinId) => db.query('select pg_advisory_xact_lock(hashtextextended($1::text, 4))', [vereinId]);
 const MITGLIED = 'id, person_id, verein_id, mitgliedsnr, status, eintritt, austritt, kuendigung_am, change_seq';
 export const mitgliedSperren = (db, { id, vereinId }) => eine(db,
   `select ${MITGLIED} from mitglieder where id = $1 and verein_id = $2 and geloescht_am is null and anonymisiert_am is null for update`, [id, vereinId]);

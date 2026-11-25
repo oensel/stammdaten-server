@@ -99,7 +99,7 @@ export default function routen(v2) {
       params: mitAntrag,
       body: objekt({ entscheidung: { type: 'string', enum: ['annehmen', 'ablehnen'] }, reaktivieren: { type: 'boolean' }, eintritt: datum, grund: { type: 'string', maxLength: 500 } }, ['entscheidung']),
     },
-    handler: (ctx, db, { params, body, version }) => dienst.antragEntscheiden(ctx, db, { verein_id: params.id, id: params.antrag_id, version, ...body }),
+    handler: (ctx, db, { params, body, version, konten }) => dienst.antragEntscheiden(ctx, db, { verein_id: params.id, id: params.antrag_id, version, ...body, konten }),
   });
 
   v2({

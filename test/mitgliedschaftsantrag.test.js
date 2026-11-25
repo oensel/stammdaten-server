@@ -58,7 +58,7 @@ it('ohne Pass-Nr. kommt die Person aus dem Konto; der Verein sieht bis zur Annah
   expect(await q(`select verein_id from lizenzen where nummer = 'JP-4711'`)).toEqual([{ verein_id: jc }]);
   expect((await q(`select count(*)::int n from personen where vorname = 'Lena'`))[0].n).toBe(1);
   expect((await entscheide(a.id, { entscheidung: 'ablehnen' })).body.code).toBe('status_unzulaessig');
-  expect(await q(`select benutzer_id from nachrichten where art = 'antrag_entschieden'`)).toEqual([{ benutzer_id: id.eltern1 }]);
+  expect((await q(`select benutzer_id from nachrichten where art = 'antrag_entschieden' order by 1`)).map((x) => x.benutzer_id)).toEqual([id.eltern1, id.schueler1].sort());
 });
 
 it('stellen dürfen die Person ab 14 und Erziehungsberechtigte, sonst niemand', async () => {
@@ -73,8 +73,10 @@ it('stellen dürfen die Person ab 14 und Erziehungsberechtigte, sonst niemand', 
   expect((await stelle('schueler1')).status).toBe(201);
   expect(await q(`select benutzer_id from nachrichten where art = 'antrag_gestellt'`)).toEqual([{ benutzer_id: id.eltern1 }]);
   // die Person selbst ist nur über Kontakt-Bevollmächtigte nicht beantragbar
-  await q(`update personen_zugriffe set art = 'bevollmaechtigt'`);
   await q(`update mitgliedschaftsantraege set status = 'zurueckgezogen'`);
+  await q(`update personen_zugriffe set umfang = 'lesen'`);
+  expect((await stelle('eltern1')).status).toBe(404); // Lesezugriff reicht nicht
+  await q(`update personen_zugriffe set art = 'bevollmaechtigt', umfang = 'aendern'`);
   expect((await stelle('eltern1')).status).toBe(404);
   expect((await stelle('eltern1', {})).status).toBe(400);
 });
@@ -139,16 +141,19 @@ it('schriftlich ohne Pass-Nr. entsteht die Person erst bei der Annahme; mit Pass
   expect((await t.api('POST', basis(), { person }, await tok('schueler1'))).status).toBe(404);
 });
 
-it('fremde Vereine und Trainer sehen und entscheiden nichts; zurückziehen darf nur der Antragsteller', async () => {
+it('fremde Vereine und Trainer sehen und entscheiden nichts; zurückziehen dürfen nur Antragsteller und Vertreter', async () => {
   const a = (await stelle('eltern1')).body.id;
   for (const wer of ['admin1', 'trainer1', 'schueler1']) {
     const token = await tok(wer);
     expect((await t.api('GET', basis(), null, token)).status).toBe(404);
     expect((await t.api('GET', `${basis()}/${a}`, null, token)).status).toBe(404);
     expect((await entscheide(a, { entscheidung: 'annehmen' }, wer, jc)).status).toBe(404);
-    expect((await t.api('DELETE', `/v2/mitgliedschaftsantraege/${a}`, null, token)).status).toBe(404);
+    if (wer !== 'schueler1') expect((await t.api('DELETE', `/v2/mitgliedschaftsantraege/${a}`, null, token)).status).toBe(404);
   }
   const eltern = await tok('eltern1');
+  await q(`update benutzer set fremd_vergeben_am = now() where id = $1`, [id.eltern1]);
+  expect((await t.api('DELETE', `/v2/mitgliedschaftsantraege/${a}`, null, eltern)).status).toBe(404);
+  await q(`update benutzer set fremd_vergeben_am = null where id = $1`, [id.eltern1]);
   expect((await t.api('GET', '/v2/ich/mitgliedschaftsantraege', null, eltern)).body.antraege).toMatchObject([{ id: a, status: 'offen' }]);
   expect((await t.api('DELETE', `/v2/mitgliedschaftsantraege/${a}`, null, eltern)).body.status).toBe('zurueckgezogen');
   expect((await entscheide(a, { entscheidung: 'annehmen' })).body.code).toBe('status_unzulaessig');
@@ -164,8 +169,45 @@ it('Fristjob erinnert einmal und lässt verfallen; der Landesverband setzt eigen
   expect(await lauf(29.9)).toEqual({ erinnert: 0, verfallen: 0 });
   expect(await lauf(30)).toEqual({ erinnert: 0, verfallen: 1 });
   expect(await q('select status from mitgliedschaftsantraege where id = $1', [a])).toEqual([{ status: 'verfallen' }]);
-  expect(await q(`select benutzer_id from nachrichten where art = 'antrag_verfallen'`)).toEqual([{ benutzer_id: id.eltern1 }]);
+  expect((await q(`select benutzer_id from nachrichten where art = 'antrag_verfallen' order by 1`)).map((x) => x.benutzer_id)).toEqual([id.eltern1, id.schueler1].sort());
   await q(`insert into fristen (art, verband_id, wert, einheit) values ('mitgliedschaftsantrag_verfall', $1, 5, 'tage')`, [baum.lv]);
   expect((await stelle('eltern1')).status).toBe(201);
   expect(await lauf(5)).toEqual({ erinnert: 0, verfallen: 1 });
+});
+
+it('endet der Zugriff des Antragstellers, ist der Antrag hinfällig und zeigt ihm keine Personendaten mehr', async () => {
+  const a = (await stelle('eltern1')).body.id;
+  await q('update personen_zugriffe set widerrufen_am = now()');
+  expect((await entscheide(a, { entscheidung: 'annehmen' })).body.code).toBe('antrag_hinfaellig');
+  const [eigen] = (await t.api('GET', '/v2/ich/mitgliedschaftsantraege', null, await tok('eltern1'))).body.antraege;
+  expect(eigen).toMatchObject({ id: a, status: 'offen' });
+  for (const f of ['vorname', 'geburtsdatum', 'grund']) expect(eigen).not.toHaveProperty(f);
+  // die Person selbst sieht ihn und zieht ihn zurück; der Verein behält danach kein Geburtsdatum und keine Pass-Nr.
+  const s = await tok('schueler1');
+  expect((await t.api('GET', '/v2/ich/mitgliedschaftsantraege', null, s)).body.antraege).toMatchObject([{ id: a, vorname: 'Lena' }]);
+  expect((await t.api('DELETE', `/v2/mitgliedschaftsantraege/${a}`, null, s)).body.status).toBe('zurueckgezogen');
+  const [v] = await liste();
+  for (const f of ['geburtsdatum', 'judopass_nr']) expect(v).not.toHaveProperty(f);
+});
+
+it('gelöschtes Konto: der Antrag ist hinfällig', async () => {
+  const a = (await stelle('eltern1')).body.id;
+  await q('update benutzer set aktiv = false where id = $1', [id.eltern1]);
+  expect((await entscheide(a, { entscheidung: 'annehmen' })).body.code).toBe('antrag_hinfaellig');
+});
+
+it('am Vereinsgerät und ohne Lese-Scope der App gibt es keine eigenen Anträge', async () => {
+  await stelle('eltern1');
+  const { meineAntraege } = await import('../src/module/personen/dienst.js');
+  for (const rechte of [{ geraet: true, app_scopes: ['mitglieder:lesen'] }, { geraet: false, app_scopes: [] }]) {
+    await expect(meineAntraege({ benutzer: { id: id.eltern1 }, jetzt: uhr, rechte: { ...rechte, quellen: [] } }, t.pool)).rejects.toMatchObject({ status: 404 });
+  }
+});
+
+it('Fremde mit Pass-Angaben erfahren nicht, ob die Person dort Mitglied ist oder einen Antrag offen hat', async () => {
+  const falsch = (await stelle('trainer1', await mitPass({ nachname: 'Falsch' }))).body;
+  expect((await stelle('trainer1', { ...await mitPass(), verein_id: jc })).body).toEqual(falsch);
+  expect((await stelle('eltern1')).status).toBe(201);
+  expect((await stelle('trainer1', await mitPass())).body).toEqual(falsch);
+  expect((await q('select count(*)::int n from antrag_fehlversuche'))[0].n).toBe(3);
 });

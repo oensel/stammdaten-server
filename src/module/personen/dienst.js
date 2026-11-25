@@ -165,7 +165,7 @@ export async function zugriffeLesen(ctx, db, { id }) {
 /** Heimatverein und volljährige Person beenden jeden Zugriff, Eltern die Zugriffe Dritter, jeder seinen eigenen. */
 export const zugriffEntziehen = (ctx, db, { id, zugriff_id, grund = null }) => schreibe(db, async (c) => {
   const person = await daten.personSperren(c, id);
-  if (!person || ctx.rechte.geraet || !appSchreibt(ctx)) throw notFound();
+  if (!person || ctx.rechte.geraet || ctx.rechte.unbestaetigt || !appSchreibt(ctx)) throw notFound();
   const z = await zieleFuer(ctx, c, person);
   const alt = await daten.zugriffSperren(c, { id: zugriff_id, personId: id });
   if (!alt) throw notFound();
@@ -261,8 +261,8 @@ export const kontoAnlegen = (ctx, db, { id, benutzername, konten }) => inTransak
 });
 
 /**
- * Schickt dem unbestätigten Konto den Link. Reihenfolge: eigene, vorher bestätigte Adresse; Adresse der Person, wenn sie nicht der
- * Vergebende gesetzt hat; bei Minderjährigen die Adressen der Erziehungsberechtigten. Die Adresse wird nicht verraten.
+ * Schickt dem unbestätigten Konto den Link. Reihenfolge: eigene, vorher bestätigte Adresse; Adresse der Person, wenn sie weder ein
+ * Vergebender noch ein von ihm Berechtigter gesetzt hat; bei Minderjährigen die übrigen Erziehungsberechtigten. Die Adresse wird nicht verraten.
  */
 export async function bestaetigungAnfordern(ctx, db, { konten }) {
   if (ctx.rechte.geraet) throw notFound();
@@ -271,10 +271,12 @@ export async function bestaetigungAnfordern(ctx, db, { konten }) {
     const person = await daten.personZuKonto(c, benutzer_id);
     const tag = heute(ctx);
     const eltern = person?.geburtsdatum && !mindestens(person, 18, tag) ? (await daten.zugriffeVon(c, person.id)).filter((x) => x.art === 'erziehungsberechtigt') : [];
-    const a = await konten.adresse(ctx, c, { benutzer_id, eltern_ids: eltern.map((x) => x.benutzer_id) });
+    const a = await konten.adresse(ctx, c, { benutzer_id });
     if (!a) throw conflict('Das Konto ist schon bestätigt', 'schon_bestaetigt');
-    const eigene = a.eigene ?? (person?.email && a.fremd_von && person.email_gesetzt_von !== a.fremd_von ? person.email : null);
-    const ziel = eigene ? [eigene] : a.eltern;
+    // Ein Zweitkonto, das ein Vergebender berechtigt hat, ist keine unabhängige Adresse
+    const befangen = new Set([...a.fremd_durch, ...(person ? await daten.zugriffeErteiltDurch(c, { personId: person.id, durch: a.fremd_durch }) : [])]);
+    const eigene = a.eigene ?? (person?.email && a.fremd_durch.length && !befangen.has(person.email_gesetzt_von) ? person.email : null);
+    const ziel = eigene ? [eigene] : await konten.adressen(ctx, c, { benutzer_ids: eltern.map((x) => x.benutzer_id).filter((x) => !befangen.has(x)) });
     if (!ziel.length) throw conflict('Keine Adresse für die Bestätigung hinterlegt', 'adresse_fehlt');
     return { an: ziel, token: await konten.linkAnlegen(ctx, c, { benutzer_id }) };
   });
@@ -357,17 +359,30 @@ async function pruefeNichtMitglied(c, personId, vereinId) {
 }
 
 const eigenSicht = ({ id, verein_id, vorname, nachname, geburtsdatum, status, grund, erstellt_am, entschieden_am, change_seq }) => ({ id, verein_id, vorname, nachname, geburtsdatum, status, grund, erstellt_am, entschieden_am, change_seq });
-/** Vor der Annahme nur die Antragsdaten; die Person erst danach. */
-const vereinsSicht = (a) => ({ ...eigenSicht(a), judopass_nr: a.judopass_nr, art: a.erfasst_von ? 'schriftlich' : 'online', ...(a.status === 'angenommen' ? { person_id: a.person_id } : {}) });
+/** Ohne aktuellen Bezug zur Person: nur Stand des Antrags, kein Name, kein Grund. */
+const standSicht = ({ id, verein_id, status, erstellt_am, entschieden_am, change_seq }) => ({ id, verein_id, status, erstellt_am, entschieden_am, change_seq });
+/** Vor der Annahme nur die Antragsdaten; die Person erst danach. Nach Ablehnung, Rückzug oder Verfall kein Geburtsdatum mehr; die Pass-Nr. nie. */
+const vereinsSicht = (a) => {
+  const { geburtsdatum, ...sicht } = eigenSicht(a);
+  return { ...sicht, ...(['offen', 'angenommen'].includes(a.status) ? { geburtsdatum } : {}), art: a.erfasst_von ? 'schriftlich' : 'online', ...(a.status === 'angenommen' ? { person_id: a.person_id } : {}) };
+};
+
+/** Wer für die Person Anträge stellt und zurückzieht: sie selbst ab 14, Eltern und Vormund mit Änderungszugriff. */
+const VERTRETER = ['erziehungsberechtigt', 'vormund'];
+const vertritt = (ctx, person, z) => (z.selbst && mindestens(person, 14, heute(ctx))) || (z.zugriff?.umfang === 'aendern' && VERTRETER.includes(z.zugriff.art));
+
+/** Person und Erziehungsberechtigte bzw. Vormund. */
+const betroffene = async (ctx, c, person) => [person.benutzer_id, ...(await daten.zugriffeVon(c, person.id))
+  .filter((z) => z.art !== 'bevollmaechtigt' && zugriffWirkt(person, z, heute(ctx))).map((z) => z.benutzer_id)].filter(Boolean);
+const empfaengerListe = (ids) => [...new Set(ids)].map((benutzer_id) => ({ benutzer_id }));
 
 async function antragEinfuegen(ctx, c, a, { konten, verein }) {
   const neu = await daten.antragAnlegen(c, { ...a, von: ctx.benutzer.id, jetzt: ctx.jetzt });
   await benachrichtigung.senden(ctx, c, { empfaenger: (await konten.adminsVon(c, verein.id)).filter((x) => x.benutzer_id !== ctx.benutzer.id), art: 'antrag_eingegangen', daten: {} });
   if (a.person) {
     // Person und Erziehungsberechtigte erfahren von Anträgen, die jemand anderes für sie stellt
-    const kreis = new Set([a.person.benutzer_id, ...(await daten.zugriffeVon(c, a.person.id)).filter((z) => z.art !== 'bevollmaechtigt' && zugriffWirkt(a.person, z, heute(ctx))).map((z) => z.benutzer_id)]);
-    kreis.delete(null); kreis.delete(undefined); kreis.delete(ctx.benutzer.id);
-    await benachrichtigung.senden(ctx, c, { empfaenger: [...kreis].map((benutzer_id) => ({ benutzer_id })), art: 'antrag_gestellt', daten: { vorname: a.person.vorname, verein: verein.name } });
+    const kreis = (await betroffene(ctx, c, a.person)).filter((x) => x !== ctx.benutzer.id);
+    await benachrichtigung.senden(ctx, c, { empfaenger: empfaengerListe(kreis), art: 'antrag_gestellt', daten: { vorname: a.person.vorname, verein: verein.name } });
   }
   return neu;
 }
@@ -385,13 +400,14 @@ export async function antragStellen(ctx, db, { verein_id, person_id = null, judo
     if (selbst && !mindestens(selbst, 14, heute(ctx))) throw notFound();
   }
   const id = mitPass ? await personZuPass(ctx, db, { verein_id, judopass_nr, nachname, geburtsdatum }) : person_id;
+  let fremd = false;
   return schreibe(db, async (c) => {
     const person = await daten.personSperren(c, id);
     if (!person) throw notFound();
+    const z = await zieleFuer(ctx, c, person);
+    fremd = !z.selbst && !z.zugriff;
     if (!mitPass) {
-      const z = await zieleFuer(ctx, c, person);
-      const erlaubt = (z.selbst && mindestens(person, 14, heute(ctx))) || ['erziehungsberechtigt', 'vormund'].includes(z.zugriff?.art);
-      if (!erlaubt) throw notFound();
+      if (!vertritt(ctx, person, z)) throw notFound();
       if (!person.geburtsdatum) throw fehler(422, 'Das Geburtsdatum der Person fehlt', 'geburtsdatum_fehlt');
     }
     const verein = await antragsVerein(ctx, c, verein_id);
@@ -400,6 +416,14 @@ export async function antragStellen(ctx, db, { verein_id, person_id = null, judo
     return eigenSicht(await antragEinfuegen(ctx, c, {
       vereinId: verein_id, personId: id, vorname: angabe.vorname, nachname: angabe.nachname, geburtsdatum: angabe.geburtsdatum, judopassNr: judopass_nr, gestelltVon: ctx.benutzer.id, person,
     }, { konten, verein }));
+  }).catch(async (e) => {
+    // Fremde erfahren nicht, ob die Person dort Mitglied ist oder einen Antrag offen hat; der Versuch zählt wie ein Fehlversuch
+    if (!fremd || !['mitgliedschaft_vorhanden', 'antrag_offen'].includes(e.code)) throw e;
+    await inTransaktion(db, async (c) => {
+      await daten.fehlversucheSperren(c, verein_id, ctx.benutzer.id);
+      await daten.fehlversuchMerken(c, { vereinId: verein_id, benutzerId: ctx.benutzer.id, jetzt: ctx.jetzt });
+    });
+    throw abgelehnt();
   });
 }
 
@@ -433,18 +457,40 @@ export async function antragLesen(ctx, db, { verein_id, id }) {
   return vereinsSicht(a);
 }
 export async function meineAntraege(ctx, db) {
-  return { antraege: (await daten.antraegeGestelltVon(db, ctx.benutzer.id)).map(eigenSicht) };
+  // Am Gerät gibt es keine Personenrechte; die App braucht den Lese-Scope wie bei /ich/personen
+  if (ctx.rechte.geraet || !ctx.rechte.app_scopes.includes('mitglieder:lesen')) throw notFound();
+  const bezug = [];
+  for (const p of await daten.personenFuerBenutzer(db, ctx.benutzer.id)) {
+    const z = await zieleFuer(ctx, db, p);
+    if (z.selbst || (z.zugriff && VERTRETER.includes(z.zugriff.art))) bezug.push(p.id);
+  }
+  const antraege = await daten.antraegeFuer(db, { benutzerId: ctx.benutzer.id, personIds: bezug });
+  return { antraege: antraege.map((a) => (bezug.includes(a.person_id) ? eigenSicht(a) : standSicht(a))) };
 }
 
 export const antragZurueckziehen = (ctx, db, { id }) => inTransaktion(db, async (c) => {
   const a = await daten.antragSperren(c, id);
-  if (!a || a.gestellt_von !== ctx.benutzer.id || ctx.rechte.geraet) throw notFound();
+  if (!a || ctx.rechte.geraet || ctx.rechte.unbestaetigt || !appSchreibt(ctx)) throw notFound();
+  const person = a.person_id && await daten.personLesen(c, a.person_id);
+  const vertreter = !!person && vertritt(ctx, person, await zieleFuer(ctx, c, person));
+  // Online gestellte Anträge ziehen auch die Person und ihre aktuellen Vertreter zurück; schriftliche liegen beim Verein
+  if (!a.gestellt_von || (a.gestellt_von !== ctx.benutzer.id && !vertreter)) throw notFound();
   if (a.status !== 'offen') throw conflict('Der Antrag ist schon entschieden', 'status_unzulaessig');
-  return eigenSicht(await daten.antragEntscheiden(c, { id, status: 'zurueckgezogen', personId: a.person_id, von: ctx.benutzer.id, jetzt: ctx.jetzt }));
+  return (vertreter ? eigenSicht : standSicht)(await daten.antragEntscheiden(c, { id, status: 'zurueckgezogen', personId: a.person_id, von: ctx.benutzer.id, jetzt: ctx.jetzt }));
 });
 
+/** Gilt der Wille noch? Der Antragsteller vertritt die Person weiterhin und sein Konto besteht. Mit Pass-Nr. stellt auch ein Fremder. */
+async function antragGilt(ctx, c, a, konten) {
+  if (!a.gestellt_von || a.judopass_nr) return true;
+  if (!await konten.aktiv(c, a.gestellt_von)) return false;
+  const person = await daten.personSperren(c, a.person_id);
+  if (person.benutzer_id === a.gestellt_von) return mindestens(person, 14, heute(ctx));
+  const z = await daten.zugriffFuer(c, { personId: person.id, benutzerId: a.gestellt_von });
+  return zugriffWirkt(person, z, heute(ctx)) && z.umfang === 'aendern' && VERTRETER.includes(z.art);
+}
+
 /** Annahme: Mitgliedschaft mit nächster Nummer; Heimatverein und Pass bleiben unverändert. */
-export async function antragEntscheiden(ctx, db, { verein_id, id, version, entscheidung, reaktivieren = false, eintritt = null, grund = null }) {
+export async function antragEntscheiden(ctx, db, { verein_id, id, version, entscheidung, reaktivieren = false, eintritt = null, grund = null, konten }) {
   await verlangeAuf(ctx, db, 'mitgliedschaftsantrag:AENDERN', { vereine: [verein_id] });
   return schreibe(db, async (c) => {
     const a = await daten.antragSperren(c, id);
@@ -456,6 +502,7 @@ export async function antragEntscheiden(ctx, db, { verein_id, id, version, entsc
     let personId = a.person_id; let mitgliedschaft = null;
     if (entscheidung === 'annehmen') {
       await antragsVerein(ctx, c, verein_id);
+      if (!await antragGilt(ctx, c, a, konten)) throw conflict('Der Antragsteller vertritt die Person nicht mehr; der Antrag ist neu zu stellen', 'antrag_hinfaellig');
       if (!personId) personId = (await daten.personAnlegen(c, { ...a.angaben, vereinId: verein_id, von })).id;
       else await daten.personSperren(c, personId);
       const alt = await daten.mitgliedschaftIn(c, { personId, vereinId: verein_id });
@@ -467,7 +514,9 @@ export async function antragEntscheiden(ctx, db, { verein_id, id, version, entsc
     }
     const status = entscheidung === 'annehmen' ? 'angenommen' : 'abgelehnt';
     const neu = await daten.antragEntscheiden(c, { id, status, personId, grund, von, jetzt: ctx.jetzt });
-    if (a.gestellt_von) await benachrichtigung.senden(ctx, c, { empfaenger: [{ benutzer_id: a.gestellt_von }], art: 'antrag_entschieden', daten: { verein: verein.name, ergebnis: status } });
+    const person = a.person_id && await daten.personLesen(c, a.person_id);
+    const kreis = [a.gestellt_von, ...(person ? await betroffene(ctx, c, person) : [])].filter(Boolean);
+    await benachrichtigung.senden(ctx, c, { empfaenger: empfaengerListe(kreis), art: 'antrag_entschieden', daten: { verein: verein?.name ?? '', ergebnis: status } });
     return { ...vereinsSicht(neu), ...(mitgliedschaft ? { mitgliedschaft } : {}) };
   });
 }
@@ -496,7 +545,9 @@ export async function antragsfristen(ctx, db, { adminsVon }) {
       if (ablauf(a.erstellt_am, f.verfall) <= ctx.jetzt) {
         await daten.antragEntscheiden(c, { id, status: 'verfallen', personId: a.person_id, von: null, jetzt: ctx.jetzt });
         const verein = await vereinFuer(ctx, c, { id: verein_id });
-        const empfaenger = a.gestellt_von ? [{ benutzer_id: a.gestellt_von }] : await adminsVon(c, verein_id);
+        const person = a.person_id && await daten.personLesen(c, a.person_id);
+        const ids = a.gestellt_von ? [a.gestellt_von] : (await adminsVon(c, verein_id)).map((x) => x.benutzer_id);
+        const empfaenger = empfaengerListe([...ids, ...(person ? await betroffene(ctx, c, person) : [])]);
         await benachrichtigung.senden(ctx, c, { empfaenger, art: 'antrag_verfallen', daten: { verein: verein?.name ?? '' } });
         verfallen++;
       } else if (!a.erinnert_am && ablauf(a.erstellt_am, f.erinnerung) <= ctx.jetzt) {
@@ -513,7 +564,8 @@ export async function antragsfristen(ctx, db, { adminsVon }) {
 /** Verwaltet der Verein im eigenen Kontext seine Mitgliedschaften? Verbandsrollen und Feldfilter reichen nicht. */
 async function verlangeVerein(ctx, db, verein_id, recht) {
   const ziel = await ladeZiel(ctx, db, { vereine: [verein_id] });
-  if (ctx.kontext?.art !== 'verein' || ctx.kontext.id !== verein_id || !darfFelder(ctx, recht, 'person', ['vorname', 'nachname'], ziel)) throw notFound();
+  const ohneFeldfilter = { ...ctx, rechte: { ...ctx.rechte, quellen: ctx.rechte.quellen.filter((q) => !q.filter?.[recht]?.felder) } };
+  if (ctx.kontext?.art !== 'verein' || ctx.kontext.id !== verein_id || !darf(ohneFeldfilter, recht, ziel)) throw notFound();
 }
 
 /** Der Austritt wirkt ab dem Austrittstag: Vereinsrollen und Direktrechte des verknüpften Benutzers enden, die Zugehörigkeit als Mitglied bleibt. */
@@ -522,6 +574,8 @@ async function vollzieheAustritt(ctx, c, m, konten) {
   await daten.gruppenAustragen(c, { mitgliedId: m.id, jetzt: ctx.jetzt, von: ctx.benutzer?.id ?? null });
   const person = await daten.personLesen(c, m.person_id);
   const z = await konten.zuMitglied(c, { verein_id: m.verein_id, mitglied_id: m.id, benutzer_id: person.benutzer_id });
+  // Eine offene Einladung darf die beendeten Rechte nicht wieder geben
+  await konten.verbraucheEinladungen(c, { verein_id: m.verein_id, mitglied_id: m.id, benutzer_id: z?.benutzer_id, jetzt: ctx.jetzt });
   if (z) {
     await beendeDirektrechte(ctx, c, { benutzer_id: z.benutzer_id, verein_id: m.verein_id });
     if (z.rolle !== 'mitglied') await konten.aufMitgliedsrolle(c, z.id, ctx.benutzer?.id ?? null);
@@ -541,9 +595,12 @@ export const austrittSetzen = (ctx, db, { verein_id, mitglied_id, version, austr
   if (m.status === 'ausgetreten') throw conflict('Die Mitgliedschaft ist schon beendet', 'status_unzulaessig');
   if (austritt && m.eintritt && austritt < m.eintritt) throw fehler(422, 'Der Austritt liegt vor dem Eintritt', 'austritt_ungueltig');
   if (austritt && kuendigung_am && kuendigung_am > austritt) throw fehler(422, 'Die Kündigung liegt nach dem Austritt', 'austritt_ungueltig');
+  await daten.austrittImVereinSperren(c, verein_id);
+  const z = await konten.zuMitglied(c, { verein_id, mitglied_id, benutzer_id: (await daten.personLesen(c, m.person_id)).benutzer_id });
+  // Einem Admin nimmt der Austritt die Rolle: dafür reicht die Mitgliederverwaltung nicht
+  if (z?.rolle === 'admin') await verlangeAuf(ctx, c, 'zugehoerigkeit:AENDERN', { vereine: [verein_id] });
   const neu = await daten.austrittSetzen(c, { id: m.id, austritt, kuendigung: austritt ? kuendigung_am ?? m.kuendigung_am : null, von: ctx.benutzer.id });
   if (!austritt || austritt > heute(ctx)) return neu;
-  const z = await konten.zuMitglied(c, { verein_id, mitglied_id, benutzer_id: (await daten.personLesen(c, m.person_id)).benutzer_id });
   if (z?.rolle === 'admin' && z.status === 'freigegeben' && (await konten.adminsVon(c, verein_id)).length === 1) throw conflict('Der letzte Vereins-Admin kann nicht austreten; erst einen anderen einsetzen', 'letzter_admin');
   return vollzieheAustritt(ctx, c, m, konten);
 });
@@ -563,10 +620,10 @@ export async function austritteVollziehen(ctx, db, { konten }) {
 }
 
 // ---- Gruppen (FR-77) ----
-// Nur im Kontext des eigenen Vereins; Rechte wie die Mitglieder, dazu der Gruppen-Scope der App
+// Nur im Kontext des eigenen Vereins; Rechte wie die Mitglieder. Schreiben begrenzt nur der Gruppen-Scope der App, nicht mitglieder:schreiben
 async function verlangeGruppen(ctx, db, verein_id, schreiben) {
   if (!ctx.rechte.app_scopes.includes(schreiben ? 'gruppen:schreiben' : 'gruppen:lesen')) throw notFound();
-  if (schreiben) return verlangeVerein(ctx, db, verein_id, 'mitglieder:AENDERN');
+  if (schreiben) return verlangeVerein({ ...ctx, rechte: { ...ctx.rechte, app_scopes: [...ctx.rechte.app_scopes, 'mitglieder:schreiben'] } }, db, verein_id, 'mitglieder:AENDERN');
   if (ctx.kontext?.art !== 'verein' || ctx.kontext.id !== verein_id) throw notFound();
   return verlangeAuf(ctx, db, 'mitglieder:LESEN', mitgliedsZiel(verein_id, 'aktiv'));
 }

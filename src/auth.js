@@ -350,4 +350,9 @@ export const zugehoerigkeitZuMitglied = async (db, { verein_id, mitglied_id, ben
   `select id, benutzer_id, rolle, status from benutzer_vereine
     where verein_id = $1 and (mitglied_id = $2 or benutzer_id = $3) and geloescht_am is null order by (mitglied_id = $2) desc nulls last limit 1 for update`,
   [verein_id, mitglied_id, benutzer_id])).rows[0];
+/** Offene Einladungen eines Benutzers bzw. für ein Mitglied in diesem Verein verfallen (Austritt). */
+export const verbraucheEinladungen = (db, { verein_id, mitglied_id, benutzer_id = null, jetzt }) => db.query(
+  `update einmal_tokens set benutzt_am = $4 where verein_id = $1 and (mitglied_id = $2 or benutzer_id = $3) and zweck = 'einladung' and benutzt_am is null`,
+  [verein_id, mitglied_id, benutzer_id, jetzt]);
+export const kontoAktiv = async (db, id) => !!(await db.query('select 1 from benutzer where id = $1 and aktiv and geloescht_am is null', [id])).rows[0];
 export const aufMitgliedsrolle = (db, id, von) => db.query(`update benutzer_vereine set rolle = 'mitglied', geaendert_von = $2 where id = $1`, [id, von]);

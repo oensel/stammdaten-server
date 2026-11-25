@@ -169,7 +169,8 @@ export default async function einmalRoutes(app) {
           `insert into benutzer_vereine (benutzer_id, verein_id, rolle, mitglied_id, status, angefragt_ueber, entschieden_von, entschieden_am, geaendert_von)
            values ($1,$2,$3,$4,'freigegeben','einladung',$5, now(), $5)
            on conflict (benutzer_id, verein_id) do update set status = 'freigegeben', rolle = excluded.rolle, geloescht_am = null,
-             mitglied_id = coalesce(excluded.mitglied_id, benutzer_vereine.mitglied_id), entschieden_am = now()`,
+             mitglied_id = coalesce(excluded.mitglied_id, benutzer_vereine.mitglied_id), entschieden_am = now(),
+             entschieden_von = excluded.entschieden_von, geaendert_von = excluded.geaendert_von`,
           [u.id, t.verein_id, t.rolle || 'mitglied', t.mitglied_id, t.erstellt_von]);
         await auditiere(db, { sub: u.id, verein_id: t.verein_id, azp: 'system:einladung' }, {
           aktion: 'recht_vergeben', objekt_art: 'vereinszugehoerigkeit', objekt_id: u.id, alt: umzug ? null : alt,
