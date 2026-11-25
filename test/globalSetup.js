@@ -15,7 +15,7 @@ let pg; let dir;
 export async function setup({ provide }) {
   dir = await mkdtemp(path.join(os.tmpdir(), 'stammdaten-test-'));
   pg = new EmbeddedPostgres({
-    databaseDir: dir, user: 'postgres', password: 'postgres', port: PORT, persistent: false,
+    databaseDir: dir, user: 'postgres', password: 'postgres', port: PORT, persistent: true, // gelöscht wird unten mit Wiederholung, Windows hält Dateien kurz fest
     initdbFlags: ['--encoding=UTF8', '--no-locale'], onLog: () => {}, onError: () => {},
   });
   await pg.initialise();
@@ -35,5 +35,5 @@ export async function setup({ provide }) {
 
 export async function teardown() {
   await pg?.stop();
-  await rm(dir, { recursive: true, force: true }).catch(() => {});
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }).catch(() => {});
 }
