@@ -61,7 +61,7 @@ export async function ladeKontext(db, benutzer, vereinId, { ohneWahl = false } =
 
 /** Benutzerzeile, wie sie ladeKontext braucht. */
 export const ladeBenutzerFuerKontext = async (db, id) =>
-  (await db.query('select id, ist_super_admin, muss_passwort_aendern, heimatverein_id from benutzer where id = $1', [id])).rows[0];
+  (await db.query('select id, ist_super_admin, muss_passwort_aendern, heimatverein_id, fremd_vergeben_am is not null as unbestaetigt from benutzer where id = $1', [id])).rows[0];
 
 /**
  * Verbandskontext (FR-15): nur wählbar, wenn der Benutzer dort eine aktive Rolle hat und einem Verein angehört (FR-14), sonst null. Vereinsrechte wirken darin nicht;

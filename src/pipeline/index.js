@@ -4,6 +4,7 @@ import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
 import { baueCtx, systemCtx } from './ctx.js';
+import { link } from '../einmal.js';
 import { entschluessele, verschluessele } from '../keys.js';
 import * as zugang from '../module/zugang/dienst.js';
 
@@ -33,7 +34,7 @@ async function ladeCtx(app, req) {
   if (claims.geraet_id) benutzer.ist_super_admin = false;
   const alleVerbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
   const app_scopes = anwendung.scopes;
-  const geraet = !!claims.geraet_id;
+  const geraet = !!claims.geraet_id; const unbestaetigt = !!benutzer.unbestaetigt;
   const basis = { benutzer: Object.freeze({ id: benutzer.id }), anwendung: anwendung.schluessel, jetzt };
   const vereinId = gewaehlt || claims.verein_id;
   // FR-15: genau ein Kontext. Verbandsrollen wirken nur im Kontext ihres Verbands, Vereinsrechte nur im Verein.
@@ -44,13 +45,13 @@ async function ladeCtx(app, req) {
     const kontext = Object.freeze({ art: 'verband', id: claims.kontext.id });
     const quellen = await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, jetzt, verbandsrollen });
     return baueCtx({ ...basis, kontext, rechte: {
-      app_scopes, quellen, verbandsrollen, stellvertreter: verbandsrollen.some((r) => r.stellvertreter_von), super_admin: benutzer.ist_super_admin,
+      app_scopes, unbestaetigt, quellen, verbandsrollen, stellvertreter: verbandsrollen.some((r) => r.stellvertreter_von), super_admin: benutzer.ist_super_admin,
       scopes: benutzer.ist_super_admin ? wirksameScopes({ superAdmin: true }, anwendung.scopes) : [],
     } });
   }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
-    return baueCtx({ ...basis, rechte: { app_scopes, geraet, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
+    return baueCtx({ ...basis, rechte: { app_scopes, geraet, unbestaetigt, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
   }
   let k;
   try {
@@ -63,7 +64,7 @@ async function ladeCtx(app, req) {
   return baueCtx({
     ...basis, kontext,
     rechte: {
-      app_scopes, geraet,
+      app_scopes, geraet, unbestaetigt,
       quellen: await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, jetzt, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
@@ -105,7 +106,7 @@ export async function registriereV2(app, definiere) {
     definiere(({ method, url, schema, status = 200, ifMatch = false, oeffentlich = false, bodyLimit, handler }) => scope.route({
       method, url, schema, ...(bodyLimit ? { bodyLimit } : {}), config: { oeffentlich },
       handler: async (req, reply) => {
-        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, cfg: app.cfg, ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
+        const ergebnis = await handler(req.ctx, app.pool, { params: req.params, query: req.query, body: req.body, cfg: app.cfg, konten: konten(app), ...(ifMatch ? { version: leseIfMatch(req) } : {}) });
         if (ergebnis?.datei) {
           const { mime, name, inhalt } = ergebnis.datei;
           return reply.type(mime).header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff')
@@ -131,3 +132,12 @@ export const zweiterFaktor = (pool, cfg) => {
     bestaetigen: (u, eingabe) => zugang.totpBestaetigen(ctx(), pool, { id: u.id, eingabe, ...krypto }),
   };
 };
+
+/** Kontodienste, die das Modul personen braucht, ohne zugang zu importieren (kein Pfeil dorthin); wie `adresseVon` beim Mailversand. */
+const konten = (app) => ({
+  anlegen: zugang.kontoFuerPersonAnlegen, adresse: zugang.bestaetigungsAdresse, linkAnlegen: zugang.bestaetigungAnlegen,
+  senden: (an, token) => app.mailer.send({
+    to: an, subject: 'Zugang bestätigen',
+    text: `Für einen Zugang wurde ein Startpasswort vergeben. Nur wenn der Zugang dir oder deinem Kind gehört, bestätige ihn bitte (48 Stunden gültig):\n\n${link(app.cfg, 'konto-bestaetigen', token)}\n`,
+  }),
+});

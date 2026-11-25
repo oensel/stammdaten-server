@@ -1,1 +1,1 @@
-export const tabellen = ['benutzer', 'benutzer_vereine', 'vereins_qr_codes', 'einmal_tokens', 'erziehungsberechtigte' /* Altweg, fällt mit /v1; führend: personen_zugriffe */, 'totp_backup_codes'];
+export const tabellen = ['benutzer', 'benutzer_vereine', 'vereins_qr_codes', 'einmal_tokens', 'erziehungsberechtigte' /* Altweg, fällt mit /v1; führend: personen_zugriffe */, 'totp_backup_codes', 'konto_bestaetigungen'];

@@ -100,3 +100,29 @@ export const backupCodesErsetzen = async (db, { id, hashes }) => {
 
 export const backupCodeVerbrauchen = async (db, { id, hash, jetzt }) => (await db.query(
   'update totp_backup_codes set benutzt_am = $3 where benutzer_id = $1 and code_hash = $2 and benutzt_am is null', [id, hash, jetzt])).rowCount === 1;
+
+// ---- Konto für eine Person (Story 3.5) ----
+export const kontoAnlegen = (db, b) => eine(db,
+  'insert into benutzer (benutzername, vorname, nachname, passwort_hash, muss_passwort_aendern, geaendert_von) values ($1,$2,$3,$4,true,$5) returning id',
+  [b.benutzername, b.vorname, b.nachname, b.hash, b.von]);
+export const zugehoerigkeitAnlegen = (db, z) => eine(db,
+  `insert into benutzer_vereine (benutzer_id, verein_id, rolle, mitglied_id, status, angefragt_ueber, entschieden_von, entschieden_am, geaendert_von)
+   values ($1,$2,'mitglied',$3,'freigegeben','verwaltung',$4,$5,$4) returning id`, [z.benutzerId, z.vereinId, z.mitgliedId, z.von, z.jetzt]);
+export const fremdVergabe = (db, id) => eine(db,
+  `select fremd_vergeben_von, case when email_bestaetigt_am < fremd_vergeben_am then email end as eigene from benutzer
+    where id = $1 and fremd_vergeben_am is not null`, [id]);
+export const sichereAdressen = async (db, ids) => (await db.query(
+  `select email from benutzer where id = any($1::uuid[]) and aktiv and geloescht_am is null and fremd_vergeben_am is null
+      and email is not null and email_bestaetigt_am is not null order by id`, [ids])).rows.map((r) => r.email);
+export const kontoSperren = (db, id) => db.query('select 1 from benutzer where id = $1 for update', [id]);
+export const bestaetigungenSeit = async (db, { id, seit }) => (await eine(db,
+  'select count(*)::int n from konto_bestaetigungen where benutzer_id = $1 and erstellt_am > $2', [id, seit])).n;
+export const bestaetigungAnlegen = (db, { id, hash, jetzt, ablauf }) => db.query(
+  `insert into konto_bestaetigungen (benutzer_id, fremd_vergeben_am, token_hash, erstellt_am, laeuft_ab_am)
+   select id, fremd_vergeben_am, $2, $3, $4 from benutzer where id = $1 and fremd_vergeben_am is not null`, [id, hash, jetzt, ablauf]);
+export const bestaetigungVerbrauchen = (db, { hash, jetzt }) => eine(db,
+  'update konto_bestaetigungen set benutzt_am = $2 where token_hash = $1 and benutzt_am is null and laeuft_ab_am > $2 returning id, benutzer_id', [hash, jetzt]);
+/** Nur für die Fremdvergabe, für die der Link entstand. */
+export const fremdVergabeAufheben = async (db, { id }) => (await db.query(
+  `update benutzer b set fremd_vergeben_am = null, fremd_vergeben_von = null from konto_bestaetigungen k
+    where k.id = $1 and b.id = k.benutzer_id and b.fremd_vergeben_am = k.fremd_vergeben_am`, [id])).rowCount === 1;
