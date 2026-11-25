@@ -35,7 +35,7 @@ const mindestens = (person, jahre, tag) => !!person.geburtsdatum && `${Number(pe
 
 const plusJahre = (tag, n) => { const d = new Date(`${tag}T00:00:00Z`); d.setUTCFullYear(d.getUTCFullYear() + n); return d.toISOString().slice(0, 10); };
 /** Ab 18 ruht jeder Zugriff ohne gültige Freischaltung; ohne Geburtsdatum wirkt keiner (E103). */
-const zugriffWirkt = (person, z, tag) => !!z && !!person.geburtsdatum && (!mindestens(person, 18, tag) || (!!z.freigeschaltet_bis && z.freigeschaltet_bis >= tag));
+const zugriffWirkt = (person, z, tag) => !!z && !!person.geburtsdatum && (z.art === 'vormund' || !mindestens(person, 18, tag) || (!!z.freigeschaltet_bis && z.freigeschaltet_bis >= tag));
 
 /**
  * Ziele für darf(): Lesen dürfen alle Vereine der Person (ausgetreten zählt nur beim Heimatverein), ändern nur der Heimatverein.
@@ -53,7 +53,7 @@ async function zieleFuer(ctx, db, person) {
   return {
     ms, selbst, zugriff,
     lesen: await ladeZiel(ctx, db, { ...basis, vereine, eigen: selbst || !!zugriff }),
-    aendern: await ladeZiel(ctx, db, { ...basis, vereine: [person.heimatverein_id], eigen_kontakt: (selbst && mindestens(person, 14, tag)) || zugriff?.umfang === 'aendern' }),
+    aendern: await ladeZiel(ctx, db, { ...basis, vereine: [person.heimatverein_id], eigen_kontakt: !ctx.rechte.unbestaetigt && ((selbst && mindestens(person, 14, tag)) || zugriff?.umfang === 'aendern') }),
   };
 }
 
@@ -104,6 +104,7 @@ const VERSTOSS = {
   zugriff_benutzer_unbekannt: [404, 'Benutzer nicht gefunden', 'benutzer_unbekannt'],
   zugriff_ohne_geburtsdatum: [422, 'Ohne Geburtsdatum der Person gibt es keinen Zugriff', 'geburtsdatum_fehlt'],
   zugriff_selbst: [422, 'Die Person selbst braucht keinen Zugriff', 'zugriff_selbst'],
+  vormund_braucht_nachweis: [422, 'Ein Vormund braucht einen vom Heimatverein bestätigten Nachweis', 'nachweis_fehlt'],
   zugriff_berechtigter_minderjaehrig: [422, 'Berechtigte müssen volljährig sein', 'berechtigter_minderjaehrig'],
 };
 async function schreibe(db, fn) {
@@ -119,11 +120,12 @@ const appSchreibt = (ctx) => ctx.rechte.app_scopes.includes('mitglieder:schreibe
 
 /** In welcher Eigenschaft verwaltet der Benutzer die Zugriffe? 'heimat' | 'person' | 'eltern' | null. */
 function verwaltetAls(ctx, person, z) {
-  if (z.selbst && mindestens(person, 18, heute(ctx))) return 'person';
+  const bestaetigt = !ctx.rechte.unbestaetigt;
+  if (bestaetigt && z.selbst && mindestens(person, 18, heute(ctx))) return 'person';
   // Heimatverein nur mit vollem Änderungsrecht im Kontext dieses Vereins; kein Feldfilter, keine Verbandsrolle
   if (ctx.kontext?.art === 'verein' && ctx.kontext.id === person.heimatverein_id
     && darfFelder(ctx, 'mitglieder:AENDERN', 'person', ['vorname', 'email'], z.aendern)) return 'heimat';
-  return z.zugriff?.art === 'erziehungsberechtigt' ? 'eltern' : null;
+  return bestaetigt && z.zugriff?.art === 'erziehungsberechtigt' ? 'eltern' : null;
 }
 
 /** Die übrigen Erziehungsberechtigten erfahren von jeder Änderung. */
@@ -133,16 +135,21 @@ async function meldeZugriff(ctx, c, person, art, ausser) {
   await benachrichtigung.senden(ctx, c, { empfaenger, art, daten: { vorname: person.vorname } });
 }
 
-export const zugriffErteilen = (ctx, db, { id, benutzer_id, art, umfang }) => schreibe(db, async (c) => {
+export const zugriffErteilen = (ctx, db, { id, benutzer_id, art, umfang, nachweis_id = null }) => schreibe(db, async (c) => {
   const person = await daten.personSperren(c, id);
   const z = await mitZielen(ctx, c, person);
   const als = verwaltetAls(ctx, person, z);
   if (!als || !appSchreibt(ctx)) throw notFound();
   if (als === 'eltern' && (art !== 'bevollmaechtigt' || umfang !== 'lesen')) throw fehler(422, 'Dritten darfst du nur Lesezugriff geben', 'nur_lesezugriff');
+  if (art === 'vormund') {
+    // FR-76: nur der Heimatverein, nur mit von ihm bestätigtem Nachweis
+    if (als !== 'heimat') throw notFound();
+    if (!nachweis_id) throw fehler(...VERSTOSS.vormund_braucht_nachweis);
+  } else if (nachweis_id) throw badRequest('Ein Nachweis gehört nur zu einem Vormund');
   if (benutzer_id === ctx.benutzer.id) throw fehler(422, 'Dir selbst kannst du keinen Zugriff geben', 'selbsterteilung');
   // Ab 18 wirkt ein Zugriff nur mit Freischaltung durch die Person selbst, je ein Jahr (E103)
   const bis = als === 'person' ? plusJahre(heute(ctx), 1) : null;
-  const neu = await daten.zugriffAnlegen(c, { personId: id, benutzerId: benutzer_id, art, umfang, bis, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+  const neu = await daten.zugriffAnlegen(c, { personId: id, benutzerId: benutzer_id, art, umfang, bis, nachweisId: nachweis_id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
   await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'personen_zugriff', objekt_id: neu.id, neu });
   await meldeZugriff(ctx, c, person, 'zugriff_erteilt', [ctx.benutzer.id, benutzer_id]);
   return neu;
@@ -189,7 +196,8 @@ function dateityp(b) {
 async function dokumentRechte(ctx, db, person) {
   if (!person) throw notFound();
   const z = await zieleFuer(ctx, db, person);
-  const eigen = z.lesen.eigen && darf(ctx, 'mitglieder:LESEN', z.lesen);
+  const eigenLesen = z.lesen.eigen && darf(ctx, 'mitglieder:LESEN', z.lesen);
+  const eigen = eigenLesen && !ctx.rechte.unbestaetigt;
   const c = { ...ctx, rechte: { ...ctx.rechte, super_admin: false } };
   const imHeimatverein = ctx.kontext?.art === 'verein' && ctx.kontext.id === person.heimatverein_id;
   const ziel = { ...z.aendern, eigen_kontakt: false };
@@ -197,7 +205,7 @@ async function dokumentRechte(ctx, db, person) {
   const r = {
     // Nachweise und Scans enthalten Kontaktdaten: nur für Apps, die sie sehen dürfen
     alle: (eigen || verwalten) && ctx.rechte.app_scopes.includes('mitglieder:kontakt'),
-    passfoto: eigen || verwalten || (imHeimatverein && darf(c, 'mitglieder:LESEN', { ...ziel, eigen: false })),
+    passfoto: eigenLesen || verwalten || (imHeimatverein && darf(c, 'mitglieder:LESEN', { ...ziel, eigen: false })),
     schreiben: appSchreibt(ctx) && (verwalten || (z.selbst && eigen && mindestens(person, 14, heute(ctx)))),
   };
   if (!r.passfoto) throw notFound();
@@ -226,4 +234,90 @@ export const dokumentAblegen = (ctx, db, { id, art, inhalt }) => inTransaktion(d
   if (!typ || (art === 'passfoto' && typ.endung === 'pdf')) throw badRequest('Nur JPEG, PNG, WebP oder PDF (Passfoto: nur Bild)', 'dateityp_ungueltig');
   const d = { personId: id, vereinId: person.heimatverein_id, art, name: `${art}.${typ.endung}`, mime: typ.mime, inhalt, von: ctx.benutzer.id };
   return (art === 'passfoto' && await daten.passfotoErsetzen(c, d)) || daten.dokumentAnlegen(c, d);
+});
+
+/** FR-76: der Heimatverein bestätigt den Nachweis der Vormundschaft. */
+export const nachweisBestaetigen = (ctx, db, { id, dokument_id }) => inTransaktion(db, async (c) => {
+  const person = await daten.personSperren(c, id);
+  const z = await mitZielen(ctx, c, person);
+  if (verwaltetAls(ctx, person, z) !== 'heimat' || !appSchreibt(ctx)) throw notFound();
+  const d = await daten.nachweisBestaetigen(c, { id: dokument_id, personId: id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+  if (!d) throw notFound();
+  return d;
+});
+
+// ---- Eigenes Konto, Volljährigkeit (FR-19, NFR-4) ----
+/** Eltern oder Heimatverein legen ab 14 ein Konto an. Das Startpasswort kennt der Anlegende: Personenrechte erst nach Bestätigung. */
+export const kontoAnlegen = (ctx, db, { id, benutzername, konten }) => inTransaktion(db, async (c) => {
+  const person = await daten.personSperren(c, id);
+  const z = await mitZielen(ctx, c, person);
+  const als = verwaltetAls(ctx, person, z);
+  if ((als !== 'heimat' && als !== 'eltern') || !appSchreibt(ctx)) throw notFound();
+  if (!mindestens(person, 14, heute(ctx))) throw fehler(422, 'Ein eigenes Konto gibt es ab 14 Jahren', 'zu_jung');
+  if (person.benutzer_id) throw conflict('Diese Person hat schon ein Konto', 'konto_vorhanden');
+  const heimat = z.ms.find((m) => m.verein_id === person.heimatverein_id);
+  if (!heimat || heimat.status === 'ausgetreten') throw conflict('Die Person ist nicht mehr Mitglied des Heimatvereins', 'nicht_mitglied');
+  return konten.anlegen(ctx, c, { benutzername, vorname: person.vorname, nachname: person.nachname, verein_id: person.heimatverein_id, mitglied_id: heimat.id });
+});
+
+/**
+ * Schickt dem unbestätigten Konto den Link. Reihenfolge: eigene, vorher bestätigte Adresse; Adresse der Person, wenn sie nicht der
+ * Vergebende gesetzt hat; bei Minderjährigen die Adressen der Erziehungsberechtigten. Die Adresse wird nicht verraten.
+ */
+export async function bestaetigungAnfordern(ctx, db, { konten }) {
+  if (ctx.rechte.geraet) throw notFound();
+  const benutzer_id = ctx.benutzer.id;
+  const { an, token } = await inTransaktion(db, async (c) => {
+    const person = await daten.personZuKonto(c, benutzer_id);
+    const tag = heute(ctx);
+    const eltern = person?.geburtsdatum && !mindestens(person, 18, tag) ? (await daten.zugriffeVon(c, person.id)).filter((x) => x.art === 'erziehungsberechtigt') : [];
+    const a = await konten.adresse(ctx, c, { benutzer_id, eltern_ids: eltern.map((x) => x.benutzer_id) });
+    if (!a) throw conflict('Das Konto ist schon bestätigt', 'schon_bestaetigt');
+    const eigene = a.eigene ?? (person?.email && a.fremd_von && person.email_gesetzt_von !== a.fremd_von ? person.email : null);
+    const ziel = eigene ? [eigene] : a.eltern;
+    if (!ziel.length) throw conflict('Keine Adresse für die Bestätigung hinterlegt', 'adresse_fehlt');
+    return { an: ziel, token: await konten.linkAnlegen(ctx, c, { benutzer_id }) };
+  });
+  for (const x of an) await konten.senden(x, token);
+  return { ok: true };
+}
+
+/** Job: ab 18 ruhen alle Zugriffe ohne gültige Freischaltung, außer Vormund. darf() rechnet ohnehin tagesgenau; hier für /v1 und Audit. */
+export const volljaehrigkeitPruefen = (ctx, db) => inTransaktion(db, async (c) => {
+  const tag = heute(ctx);
+  let ruhend = 0;
+  for (const z of await daten.ruhensKandidaten(c, tag)) {
+    if (zugriffWirkt(z, z, tag)) continue;
+    const neu = await daten.zugriffRuht(c, { id: z.id, jetzt: ctx.jetzt });
+    await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'personen_zugriff', objekt_id: z.id, alt: neu, grund: 'Zugriff ruht ab 18' });
+    ruhend++;
+  }
+  return { ruhend };
+});
+
+async function abfrageStand(ctx, c, person) {
+  const z = await mitZielen(ctx, c, person);
+  if (verwaltetAls(ctx, person, z) !== 'person') throw notFound();
+  const zugriffe = (await daten.zugriffeVon(c, person.id)).filter((x) => x.art !== 'vormund');
+  const zuletzt = person.zugriffe_abgefragt_am;
+  return { faellig: zugriffe.length > 0 && (!zuletzt || plusJahre(zuletzt, 1) <= heute(ctx)), zugriffe };
+}
+
+/** Jahresfrage der volljährigen Person; die Oberfläche fragt nach der Anmeldung. */
+export const abfrageLesen = (ctx, db, { id }) => inTransaktion(db, async (c) => abfrageStand(ctx, c, await daten.personLesen(c, id)));
+
+export const abfrageBeantworten = (ctx, db, { id, entscheidungen }) => inTransaktion(db, async (c) => {
+  const person = await daten.personSperren(c, id);
+  const { zugriffe } = await abfrageStand(ctx, c, person);
+  if (!appSchreibt(ctx)) throw notFound();
+  const wahl = new Map(entscheidungen.map((e) => [e.zugriff_id, e.behalten]));
+  if (wahl.size !== entscheidungen.length || wahl.size !== zugriffe.length || !zugriffe.every((z) => wahl.has(z.id))) throw fehler(422, 'Bitte über jeden Zugriff genau einmal entscheiden', 'entscheidung_fehlt');
+  for (const z of zugriffe) {
+    const behalten = wahl.get(z.id);
+    const neu = behalten ? await daten.zugriffFreischalten(c, { id: z.id, bis: plusJahre(heute(ctx), 1) })
+      : await daten.zugriffBeenden(c, { id: z.id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+    await audit.schreiben(ctx, c, { aktion: behalten ? 'recht_vergeben' : 'recht_entzogen', objekt_art: 'personen_zugriff', objekt_id: z.id, [behalten ? 'neu' : 'alt']: neu, grund: 'Jahresfrage' });
+  }
+  await daten.abfrageMerken(c, { id, tag: heute(ctx) });
+  return { zugriffe: await daten.zugriffeVon(c, id) };
 });

@@ -30,6 +30,10 @@ export default function routen(v2) {
     handler: (ctx, db, { body }) => dienst.registrieren(ctx, db, body),
   });
   v2({
+    method: 'POST', url: '/auth/konto-bestaetigen', oeffentlich: true, schema: { body: objekt({ token }, ['token']) },
+    handler: (ctx, db, { body }) => dienst.kontoBestaetigen(ctx, db, body),
+  });
+  v2({
     method: 'POST', url: QR, status: 201,
     schema: { params: mitVerein, body: objekt({ gueltig_tage: { type: 'integer', minimum: 1, maximum: 365 } }) },
     handler: (ctx, db, { params, body }) => dienst.qrCodeAnlegen(ctx, db, { ...params, ...body }),

@@ -33,7 +33,7 @@ export default function routen(v2) {
     method: 'POST', url: '/personen/:id/zugriffe', status: 201,
     schema: {
       params: mitId,
-      body: objekt({ benutzer_id: uuid, art: { type: 'string', enum: ['erziehungsberechtigt', 'bevollmaechtigt'] }, umfang: { type: 'string', enum: ['lesen', 'aendern'] } }, ['benutzer_id', 'art', 'umfang']),
+      body: objekt({ benutzer_id: uuid, art: { type: 'string', enum: ['erziehungsberechtigt', 'bevollmaechtigt', 'vormund'] }, nachweis_id: uuid, umfang: { type: 'string', enum: ['lesen', 'aendern'] } }, ['benutzer_id', 'art', 'umfang']),
     },
     handler: (ctx, db, { params, body }) => dienst.zugriffErteilen(ctx, db, { id: params.id, ...body }),
   });
@@ -51,5 +51,24 @@ export default function routen(v2) {
     method: 'POST', url: '/personen/:id/dokumente', status: 201, bodyLimit: 10 * 1024 * 1024,
     schema: { params: mitId, querystring: objekt({ art: { type: 'string', enum: ['passfoto', 'scan', 'bescheinigung', 'vormundschaftsnachweis'] } }, ['art']) },
     handler: (ctx, db, { params, query: { art }, body }) => dienst.dokumentAblegen(ctx, db, { id: params.id, art, inhalt: body }),
+  });
+  v2({
+    method: 'POST', url: '/personen/:id/dokumente/:dokument_id/bestaetigen', schema: { params: objekt({ id: uuid, dokument_id: uuid }, ['id', 'dokument_id']) },
+    handler: (ctx, db, { params }) => dienst.nachweisBestaetigen(ctx, db, params),
+  });
+  v2({
+    method: 'POST', url: '/personen/:id/konto', status: 201,
+    schema: { params: mitId, body: objekt({ benutzername: { type: 'string', minLength: 3, maxLength: 60, pattern: '^[A-Za-z0-9._-]+$' } }, ['benutzername']) },
+    handler: (ctx, db, { params, body, konten }) => dienst.kontoAnlegen(ctx, db, { id: params.id, ...body, konten }),
+  });
+  v2({ method: 'POST', url: '/ich/konto-bestaetigung', status: 202, handler: (ctx, db, { konten }) => dienst.bestaetigungAnfordern(ctx, db, { konten }) });
+  v2({ method: 'GET', url: '/personen/:id/zugriffsabfrage', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.abfrageLesen(ctx, db, params) });
+  v2({
+    method: 'POST', url: '/personen/:id/zugriffsabfrage',
+    schema: {
+      params: mitId,
+      body: objekt({ entscheidungen: { type: 'array', maxItems: 100, items: objekt({ zugriff_id: uuid, behalten: { type: 'boolean' } }, ['zugriff_id', 'behalten']) } }, ['entscheidungen']),
+    },
+    handler: (ctx, db, { params, body }) => dienst.abfrageBeantworten(ctx, db, { id: params.id, ...body }),
   });
 }
