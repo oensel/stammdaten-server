@@ -344,3 +344,10 @@ export async function pruefeAnwendungsToken(app, req, { vereinId, scope = null }
 /** Freigegebene Vereins-Admins: [{ benutzer_id }], als Empfänger von Benachrichtigungen (Worker und Pipeline reichen sie hinein). */
 export const ladeVereinsAdmins = async (db, vereinId) => (await db.query(
   `select benutzer_id from benutzer_vereine where verein_id = $1 and rolle = 'admin' and status = 'freigegeben' and geloescht_am is null`, [vereinId])).rows;
+
+/** Zugehörigkeit des Benutzers, der in diesem Verein mit dieser Mitgliedschaft verknüpft ist; gesperrt bis zum Ende der Transaktion. */
+export const zugehoerigkeitZuMitglied = async (db, { verein_id, mitglied_id, benutzer_id }) => (await db.query(
+  `select id, benutzer_id, rolle, status from benutzer_vereine
+    where verein_id = $1 and (mitglied_id = $2 or benutzer_id = $3) and geloescht_am is null order by (mitglied_id = $2) desc nulls last limit 1 for update`,
+  [verein_id, mitglied_id, benutzer_id])).rows[0];
+export const aufMitgliedsrolle = (db, id, von) => db.query(`update benutzer_vereine set rolle = 'mitglied', geaendert_von = $2 where id = $1`, [id, von]);

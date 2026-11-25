@@ -3,7 +3,7 @@ import { badRequest, conflict, fehler, notFound, tooMany } from '../../errors.js
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
 import { fristFuer, landesverbandVon, vereinFuer } from '../organisation/dienst.js';
-import { darf, darfFelder, ladeZiel, projiziere, verlangeAuf } from '../rechte/dienst.js';
+import { beendeDirektrechte, darf, darfFelder, ladeZiel, projiziere, verlangeAuf } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 /**
@@ -507,4 +507,56 @@ export async function antragsfristen(ctx, db, { adminsVon }) {
     });
   }
   return { erinnert, verfallen };
+}
+
+// ---- Austritt (FR-8, E81, E99) ----
+/** Verwaltet der Verein im eigenen Kontext seine Mitgliedschaften? Verbandsrollen und Feldfilter reichen nicht. */
+async function verlangeVerein(ctx, db, verein_id, recht) {
+  const ziel = await ladeZiel(ctx, db, { vereine: [verein_id] });
+  if (ctx.kontext?.art !== 'verein' || ctx.kontext.id !== verein_id || !darfFelder(ctx, recht, 'person', ['vorname', 'nachname'], ziel)) throw notFound();
+}
+
+/** Der Austritt wirkt ab dem Austrittstag: Vereinsrollen und Direktrechte des verknüpften Benutzers enden, die Zugehörigkeit als Mitglied bleibt. */
+async function vollzieheAustritt(ctx, c, m, konten) {
+  const neu = await daten.austrittVollziehen(c, { id: m.id, von: ctx.benutzer?.id ?? null });
+  const person = await daten.personLesen(c, m.person_id);
+  const z = await konten.zuMitglied(c, { verein_id: m.verein_id, mitglied_id: m.id, benutzer_id: person.benutzer_id });
+  if (z) {
+    await beendeDirektrechte(ctx, c, { benutzer_id: z.benutzer_id, verein_id: m.verein_id });
+    if (z.rolle !== 'mitglied') await konten.aufMitgliedsrolle(c, z.id, ctx.benutzer?.id ?? null);
+    await audit.schreiben(ctx, c, { aktion: 'recht_entzogen', objekt_art: 'vereinszugehoerigkeit', objekt_id: z.id, alt: { benutzer_id: z.benutzer_id, verein_id: m.verein_id, rolle: z.rolle }, neu: { rolle: 'mitglied' }, grund: 'Austritt' });
+  }
+  return neu;
+}
+
+const pruefeVersion = (m, version) => { if (m.change_seq !== version) throw fehler(412, 'Der Datensatz wurde inzwischen geändert', 'version_veraltet'); };
+
+/** Heimatverein, Person und Historie bleiben. `austritt` null nimmt einen noch nicht wirksamen Austritt zurück. */
+export const austrittSetzen = (ctx, db, { verein_id, mitglied_id, version, austritt, kuendigung_am, konten }) => inTransaktion(db, async (c) => {
+  await verlangeVerein(ctx, c, verein_id, 'mitglieder:AENDERN');
+  const m = await daten.mitgliedSperren(c, { id: mitglied_id, vereinId: verein_id });
+  if (!m) throw notFound();
+  pruefeVersion(m, version);
+  if (m.status === 'ausgetreten') throw conflict('Die Mitgliedschaft ist schon beendet', 'status_unzulaessig');
+  if (austritt && m.eintritt && austritt < m.eintritt) throw fehler(422, 'Der Austritt liegt vor dem Eintritt', 'austritt_ungueltig');
+  if (austritt && kuendigung_am && kuendigung_am > austritt) throw fehler(422, 'Die Kündigung liegt nach dem Austritt', 'austritt_ungueltig');
+  const neu = await daten.austrittSetzen(c, { id: m.id, austritt, kuendigung: austritt ? kuendigung_am ?? m.kuendigung_am : null, von: ctx.benutzer.id });
+  if (!austritt || austritt > heute(ctx)) return neu;
+  const z = await konten.zuMitglied(c, { verein_id, mitglied_id, benutzer_id: (await daten.personLesen(c, m.person_id)).benutzer_id });
+  if (z?.rolle === 'admin' && z.status === 'freigegeben' && (await konten.adminsVon(c, verein_id)).length === 1) throw conflict('Der letzte Vereins-Admin kann nicht austreten; erst einen anderen einsetzen', 'letzter_admin');
+  return vollzieheAustritt(ctx, c, m, konten);
+});
+
+/** Job: vollzieht Austritte, deren Tag erreicht ist, je Mitgliedschaft in eigener Transaktion. */
+export async function austritteVollziehen(ctx, db, { konten }) {
+  let vollzogen = 0;
+  for (const { id, verein_id } of await daten.faelligeAustritte(db, heute(ctx))) {
+    await inTransaktion(db, async (c) => {
+      const m = await daten.mitgliedSperren(c, { id, vereinId: verein_id });
+      if (!m || m.status === 'ausgetreten' || !m.austritt || m.austritt > heute(ctx)) return;
+      await vollzieheAustritt(ctx, c, m, konten);
+      vollzogen++;
+    });
+  }
+  return { vollzogen };
 }

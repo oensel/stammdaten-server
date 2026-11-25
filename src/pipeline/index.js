@@ -1,5 +1,5 @@
 // Anfrage-Pipeline für /v2 (AD-2, AD-9): Token → Kontext → ctx → genau ein Dienst; Fehler als Problem-JSON.
-import { ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, ladeVereinsAdmins, pruefeBearer } from '../auth.js';
+import { aufMitgliedsrolle, ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, ladeVereinsAdmins, pruefeBearer, zugehoerigkeitZuMitglied } from '../auth.js';
 import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
@@ -135,7 +135,7 @@ export const zweiterFaktor = (pool, cfg) => {
 
 /** Kontodienste, die das Modul personen braucht, ohne zugang zu importieren (kein Pfeil dorthin); wie `adresseVon` beim Mailversand. */
 const konten = (app) => ({
-  adminsVon: ladeVereinsAdmins,
+  adminsVon: ladeVereinsAdmins, zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle,
   anlegen: zugang.kontoFuerPersonAnlegen, adresse: zugang.bestaetigungsAdresse, linkAnlegen: zugang.bestaetigungAnlegen,
   senden: (an, token) => app.mailer.send({
     to: an, subject: 'Zugang bestätigen',

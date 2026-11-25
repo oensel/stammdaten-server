@@ -101,4 +101,13 @@ export default function routen(v2) {
     },
     handler: (ctx, db, { params, body, version }) => dienst.antragEntscheiden(ctx, db, { verein_id: params.id, id: params.antrag_id, version, ...body }),
   });
+
+  v2({
+    method: 'PATCH', url: '/vereine/:id/mitglieder/:mitglied_id/austritt', ifMatch: true,
+    schema: {
+      params: objekt({ id: uuid, mitglied_id: uuid }, ['id', 'mitglied_id']),
+      body: objekt({ austritt: { ...datum, type: ['string', 'null'] }, kuendigung_am: datum }, ['austritt']),
+    },
+    handler: (ctx, db, { params, body, version, konten }) => dienst.austrittSetzen(ctx, db, { verein_id: params.id, mitglied_id: params.mitglied_id, version, ...body, konten }),
+  });
 }

@@ -23,7 +23,7 @@ const PERSON = `id, vorname, nachname, geburtsdatum, geschlecht, nationalitaet, 
 export const personLesen = (db, id) => eine(db, `select ${PERSON} from personen where id = $1`, [id]);
 export const personSperren = (db, id) => eine(db, `select ${PERSON} from personen where id = $1 for no key update`, [id]);
 export const mitgliedschaften = async (db, personId) => (await db.query(
-  `select id, verein_id, mitgliedsnr, status, eintritt, austritt from mitglieder where person_id = $1 and geloescht_am is null order by erstellt_am, id`, [personId])).rows;
+  `select id, verein_id, mitgliedsnr, status, eintritt, austritt, change_seq from mitglieder where person_id = $1 and geloescht_am is null order by erstellt_am, id`, [personId])).rows;
 export const kontaktAendern = (db, p) => eine(db,
   `update personen set strasse = $2, plz = $3, ort = $4, land = $5, email = $6, telefon = $7, geaendert_von = $8 where id = $1 returning ${PERSON}`,
   [p.id, p.strasse, p.plz, p.ort, p.land, p.email, p.telefon, p.von]);
@@ -107,3 +107,14 @@ export const antragEntscheiden = (db, a) => eine(db,
   `update mitgliedschaftsantraege set status = $2, person_id = $3, grund = $4, entschieden_von = $5, entschieden_am = $6, geaendert_von = $5, angaben = null
     where id = $1 returning ${ANTRAG}`, [a.id, a.status, a.personId, a.grund ?? null, a.von, a.jetzt]);
 export const antragErinnert = (db, { id, jetzt }) => db.query('update mitgliedschaftsantraege set erinnert_am = $2 where id = $1', [id, jetzt]);
+
+// ---- Austritt ----
+const MITGLIED = 'id, person_id, verein_id, mitgliedsnr, status, eintritt, austritt, kuendigung_am, change_seq';
+export const mitgliedSperren = (db, { id, vereinId }) => eine(db,
+  `select ${MITGLIED} from mitglieder where id = $1 and verein_id = $2 and geloescht_am is null and anonymisiert_am is null for update`, [id, vereinId]);
+export const austrittSetzen = (db, { id, austritt, kuendigung, von }) => eine(db,
+  `update mitglieder set austritt = $2, kuendigung_am = $3, geaendert_von = $4 where id = $1 returning ${MITGLIED}`, [id, austritt, kuendigung, von]);
+export const austrittVollziehen = (db, { id, von }) => eine(db,
+  `update mitglieder set status = 'ausgetreten', geaendert_von = coalesce($2, geaendert_von) where id = $1 returning ${MITGLIED}`, [id, von]);
+export const faelligeAustritte = async (db, tag) => (await db.query(
+  `select id, verein_id from mitglieder where status <> 'ausgetreten' and austritt <= $1::date and geloescht_am is null and anonymisiert_am is null order by austritt, id`, [tag])).rows;
