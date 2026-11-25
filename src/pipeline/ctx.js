@@ -1,5 +1,5 @@
 // ctx der Dienste (AD-2): { benutzer, kontext, rechte, anwendung, jetzt }
-const KEINE_RECHTE = { rolle: null, rechte: [], scopes: [], stellvertreter: false, super_admin: false, verbandsrollen: [], quellen: [], app_scopes: [], eigener_rang: null };
+const KEINE_RECHTE = { rolle: null, rechte: [], scopes: [], stellvertreter: false, super_admin: false, geraet: false, verbandsrollen: [], quellen: [], app_scopes: [], eigener_rang: null };
 
 export function baueCtx({ benutzer, kontext = null, rechte, anwendung, jetzt }) {
   return Object.freeze({ benutzer, kontext, rechte: Object.freeze({ ...KEINE_RECHTE, ...rechte }), anwendung, jetzt });

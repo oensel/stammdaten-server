@@ -25,6 +25,8 @@ describe('Zweiter Faktor für den Super-Admin (Story 2.9)', () => {
     t.einrichtungsToken = r.body.einrichtungs_token;
     // das Einrichtungs-Token ist kein Access-Token
     expect((await t.api('GET', '/v2/ich', null, t.einrichtungsToken)).status).toBe(401);
+    expect((await t.api('GET', '/ich', null, t.einrichtungsToken)).status).toBe(401);
+    expect((await t.api('PATCH', '/ich', { email: 'x@example.org' }, t.einrichtungsToken)).status).toBe(401);
   });
 
   it('Einrichtung: falscher Bestätigungscode zählt als Fehlversuch, richtiger aktiviert und liefert Backup-Codes', async () => {
@@ -86,6 +88,34 @@ describe('Zweiter Faktor für den Super-Admin (Story 2.9)', () => {
     const pinLogin = (benutzername) => t.api('POST', '/auth/pin', { benutzername, pin, geraet_id: ids[benutzername], client_id: CLIENT });
     expect((await pinLogin('schueler1')).status).toBe(200);
     expect((await pinLogin('eltern1')).body).toMatchObject({ status: 401, code: 'pin_fehlgeschlagen' });
+  });
+
+  it('parallele Anmeldungen überholen die Sperre nicht', async () => {
+    await t.pool.query(`update benutzer set fehlversuche = 0, gesperrt_bis = null where benutzername = 'eltern1'`);
+    const r = await Promise.all(Array.from({ length: 12 }, () => t.login('eltern1', { code: '000000' })));
+    expect(r.filter((x) => x.status === 401)).toHaveLength(2);
+    expect(r.filter((x) => x.status === 429)).toHaveLength(10);
+  });
+
+  it('eine Sitzung ohne zweiten Faktor lässt sich nach der Ernennung nicht erneuern; mit Faktor schon', async () => {
+    const alt = (await t.login('schueler1')).body.refresh_token;
+    const erneuern = (refresh_token) => t.api('POST', '/oauth/token', { grant_type: 'refresh_token', refresh_token, client_id: CLIENT });
+    await t.pool.query(`update benutzer set ist_super_admin = true where benutzername = 'schueler1'`);
+    expect((await erneuern(alt)).body.code).toBe('zweiter_faktor_noetig');
+    await t.pool.query(`update benutzer set ist_super_admin = false where benutzername = 'schueler1'`);
+    await t.pool.query(`update benutzer set fehlversuche = 0, gesperrt_bis = null where benutzername = 'eltern1'`);
+    naechsterSchritt();
+    const neu = (await t.login('eltern1', { code: code(geheimnis, schrittFuer(jetzt)) })).body.refresh_token;
+    const r = await erneuern(neu);
+    expect(r.status).toBe(200);
+    expect((await erneuern(r.body.refresh_token)).status).toBe(200);
+  });
+
+  it('scheitert die Anmeldung nach dem Code, bleibt er gültig', async () => {
+    naechsterSchritt();
+    const c = code(geheimnis, schrittFuer(jetzt));
+    expect((await t.login('eltern1', { code: c, verein_id: '00000000-0000-4000-8000-000000000000' })).status).toBe(403);
+    expect((await t.login('eltern1', { code: c })).status).toBe(200);
   });
 
   it('normale Benutzer brauchen keinen zweiten Faktor', async () => {

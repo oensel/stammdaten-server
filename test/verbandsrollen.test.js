@@ -1,7 +1,7 @@
 // Story 2.6 (FR-21, P13, P18): Verbandsrollen und Stellvertreter
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { gibRolle, verbandsbaum, verbandsToken } from './fabrik.js';
-import { neueApp } from './helper.js';
+import { PW, neueApp } from './helper.js';
 
 let t; let baum; let fremd; let lvAdmin; let djbAdmin; let id;
 beforeAll(async () => {
@@ -106,5 +106,23 @@ describe('Stellvertreter', () => {
     expect(offen).toBe(0);
     expect((await audit('stellvertreter_entzogen', s2))[0]).toMatchObject({ grund: 'Amt beendet' });
     expect((await ruf('POST', `${rollen(baum.kreis)}/${amt}/stellvertreter`, { benutzer_id: id.admin1, grund: 'x' })).status).toBe(404);
+  });
+});
+
+describe('Review: Stellvertretung des LV-Admins', () => {
+  it('nur der DJB-Admin ernennt sie; der Stellvertreter ernennt niemanden', async () => {
+    const amtLv = (await t.pool.query(`select id from benutzer_verbandsrollen where rolle = 'lv_admin' and benutzer_id = $1 and beendet_am is null`, [id.trainer1])).rows[0].id;
+    const url = `${rollen(baum.lv)}/${amtLv}/stellvertreter`;
+    expect((await ruf('POST', url, { benutzer_id: id.schueler1, grund: 'x' })).body).toMatchObject({ status: 422, code: 'rolle_nicht_vergebbar' });
+    expect((await ruf('POST', url, { benutzer_id: id.schueler1, grund: 'x' }, djbAdmin)).status).toBe(201);
+    const stv = await verbandsToken(t, 'schueler1', baum.lv);
+    expect((await ruf('POST', url, { benutzer_id: id.pruefer1, grund: 'x' }, stv)).body).toMatchObject({ status: 422, code: 'stellvertreter_darf_nicht_ernennen' });
+  });
+  it('mit der Kontolöschung enden Amt und Stellvertretung, auditiert', async () => {
+    const amtLv = (await t.pool.query(`select id from benutzer_verbandsrollen where rolle = 'lv_admin' and benutzer_id = $1 and beendet_am is null`, [id.trainer1])).rows[0].id;
+    const token = (await t.login('trainer1')).body.access_token;
+    expect((await t.api('DELETE', '/ich', { passwort: PW }, token)).status).toBe(204);
+    expect((await t.pool.query('select 1 from benutzer_verbandsrollen where (id = $1 or stellvertreter_von = $1) and beendet_am is null', [amtLv])).rows).toEqual([]);
+    expect(await audit('recht_entzogen', amtLv)).toMatchObject([{ grund: 'Konto gelöscht' }]);
   });
 });

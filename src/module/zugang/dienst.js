@@ -38,7 +38,8 @@ export async function anfragenMitPasswort(ctx, db, { token, benutzername, passwo
   const falsch = () => unauthorized('Benutzername oder Passwort falsch', 'anmeldung_fehlgeschlagen');
   await inTransaktion(db, (c) => pruefeQr(ctx, c, token));
   const konto = await daten.kontoFuerAnmeldung(db, { kennung: benutzername.trim(), jetzt: ctx.jetzt });
-  if (!konto) { await verifyDummy(passwort); throw falsch(); }
+  // Super-Admins gehen nicht über diesen Weg: er kennt keinen zweiten Faktor und würde ihr Passwort bestätigen
+  if (!konto || konto.ist_super_admin) { await verifyDummy(passwort); throw falsch(); }
   if (konto.gesperrt) throw tooMany('Zu viele Fehlversuche – bitte später erneut versuchen');
   if (!await verifySecret(konto.passwort_hash, passwort)) {
     await daten.fehlversuch(db, { id: konto.id, max: cfg.maxFehlversuche, sperreBis: new Date(ctx.jetzt.getTime() + cfg.sperreMinuten * 60_000) });
@@ -161,7 +162,10 @@ export async function zweitenFaktorPruefen(ctx, db, { id, eingabe, entschluessel
 /** Neue Backup-Codes; die alten verfallen sofort. Nur im Klartext in der Antwort. */
 export async function backupCodesErneuern(ctx, db, { id }) {
   const codes = neueBackupCodes();
-  await inTransaktion(db, (c) => daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) }));
+  await inTransaktion(db, async (c) => {
+    await daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) });
+    await daten.sperreAufheben(c, id);
+  });
   return codes;
 }
 
@@ -181,6 +185,7 @@ export async function totpBestaetigen(ctx, db, { id, eingabe, entschluesseln }) 
   await inTransaktion(db, async (c) => {
     if (!await daten.totpAktivieren(c, { id, schritt, wert: roh, jetzt: ctx.jetzt })) throw conflict('Die Einrichtung wurde inzwischen geändert', 'zweiter_faktor_vorhanden');
     await daten.backupCodesErsetzen(c, { id, hashes: codes.map(sha256) });
+    await daten.sperreAufheben(c, id);
   });
   return codes;
 }

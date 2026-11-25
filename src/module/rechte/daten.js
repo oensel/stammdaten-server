@@ -1,5 +1,5 @@
 export const direktrechteBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
-  'update benutzer_rechte set geloescht_am = $3, geaendert_von = $4 where benutzer_id = $1 and verein_id = $2 and geloescht_am is null',
+  'update benutzer_rechte set geloescht_am = $3, geaendert_von = $4 where benutzer_id = $1 and ($2::uuid is null or verein_id = $2) and geloescht_am is null',
   [benutzerId, vereinId, jetzt, von]);
 
 const MIT_RECHTEN = `select r.schluessel, coalesce(array_agg(b.recht || ':' || b.operation) filter (where b.recht is not null), '{}') as rechte,
@@ -119,13 +119,19 @@ export const delegationenVerwaisen = (db, { geberId, schluessel, vereinId, jetzt
   `update delegationen set verwaist_seit = $4 where geber_id = $1 and beendet_am is null and verwaist_seit is null and delegiert_aus_quelle is not null
       and ($2::text is null or delegiert_aus_schluessel = $2) and ($3::uuid is null or verein_id = $3)`, [geberId, schluessel ?? null, vereinId ?? null, jetzt]);
 
-export const erhalteneDelegationenBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
-  'update delegationen set beendet_am = $3, beendet_von = $4 where empfaenger_id = $1 and verein_id = $2 and beendet_am is null', [benutzerId, vereinId, jetzt, von]);
+export const erhalteneDelegationenBeenden = async (db, { benutzerId, vereinId, von, jetzt }) => (await db.query(
+  `update delegationen set beendet_am = $3, beendet_von = $4 where empfaenger_id = $1 and ($2::uuid is null or verein_id = $2) and beendet_am is null returning ${SPALTEN}`,
+  [benutzerId, vereinId, jetzt, von])).rows;
+
+export const hatSonderrechte = async (db, { benutzerId, nurVerband, heute }) => (await db.query(
+  `select exists (select 1 from delegationen where empfaenger_id = $1 and beendet_am is null and gueltig_bis >= $2 and (not $3 or verband_id is not null))
+       or (not $3 and exists (select 1 from benutzer_vereinsrollen where benutzer_id = $1 and beendet_am is null)) as ja`, [benutzerId, heute, nurVerband])).rows[0].ja;
 
 export const delegationenAlsQuellen = async (db, { benutzerId, kontext, heute }) => (await db.query(
   `select d.recht || ':' || d.operation as recht, to_jsonb(f) as filter from delegationen d left join datenfilter f on f.id = d.datenfilter_id
     where d.empfaenger_id = $1 and d.beendet_am is null and d.gueltig_von <= $4 and d.gueltig_bis >= $4
       and case $2 when 'verein' then d.verein_id = $3 else d.verband_id = $3 end`, [benutzerId, kontext.art, kontext.id, heute])).rows;
 
-export const vereinsrollenBeenden = (db, { benutzerId, vereinId, von, jetzt }) => db.query(
-  'update benutzer_vereinsrollen set beendet_am = $3, beendet_von = $4 where benutzer_id = $1 and verein_id = $2 and beendet_am is null', [benutzerId, vereinId, jetzt, von]);
+export const vereinsrollenBeenden = async (db, { benutzerId, vereinId, von, jetzt }) => (await db.query(
+  `update benutzer_vereinsrollen set beendet_am = $3, beendet_von = $4 where benutzer_id = $1 and ($2::uuid is null or verein_id = $2) and beendet_am is null
+   returning id, benutzer_id, verein_id, rolle_id`, [benutzerId, vereinId, jetzt, von])).rows;

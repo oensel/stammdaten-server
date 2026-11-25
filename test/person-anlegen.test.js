@@ -12,7 +12,7 @@ beforeEach(async () => {
   baum = await verbandsbaum(t.pool);
   jc = (await q(`select id from vereine where name = 'JC Demo'`))[0].id;
   await q('update vereine set verband_id = $2 where id = $1', [jc, baum.kreis]);
-  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben}'`, [CLIENT]);
+  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben,mitglieder:kontakt}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben,mitglieder:kontakt}'`, [CLIENT]);
   admin = await tok('admin1');
 });
 afterEach(() => t.schliessen());

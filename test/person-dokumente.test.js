@@ -18,7 +18,7 @@ beforeEach(async () => {
   jc = (await q(`select id from vereine where name = 'JC Demo'`))[0].id;
   await q('update vereine set verband_id = $2 where id = $1', [jc, baum.kreis]);
   b = await neuerVerein(t.pool, baum.kreis);
-  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben}'`, [CLIENT]);
+  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben,mitglieder:kontakt}' where schluessel = $1 and not scopes @> '{mitglieder:schreiben,mitglieder:kontakt}'`, [CLIENT]);
   [{ id: lenaM, person_id: lena }] = await q(`select id, person_id from mitglieder where vorname = 'Lena'`);
   lenaB = (await q(`insert into mitglieder (person_id, verein_id, mitgliedsnr, vorname, nachname) values ($1,$2,1,'x','x') returning id`, [lena, b]))[0].id;
   await q(`insert into benutzer_vereine (benutzer_id, verein_id, rolle, status) values ($1,$2,'admin','freigegeben')`, [await uid('pruefer1'), b]);

@@ -8,7 +8,7 @@ import { baueCtx, systemCtx } from '../src/pipeline/ctx.js';
 import { gibRolle, verbandsbaum, verbandsToken, verein } from './fabrik.js';
 import { neueApp } from './helper.js';
 
-const ALLE = Object.entries(KATALOG).flatMap(([n, ops]) => ops.map((o) => scopeFuer(`${n}:${o}`)));
+const ALLE = ['mitglieder:kontakt'].concat(Object.entries(KATALOG).flatMap(([n, ops]) => ops.map((o) => scopeFuer(`${n}:${o}`))));
 // Baum: DJB > LV1 > K1 > V1 und DJB > LV2 > K2 > V2
 const vorfahren = { V1: ['K1', 'LV1', 'DJB'], V2: ['K2', 'LV2', 'DJB'], LV1: ['LV1', 'DJB'], K1: ['K1', 'LV1', 'DJB'] };
 const auf = (v, extra = {}) => ({ vereine: [v], heimatverein_id: v, vorfahren, ...extra });

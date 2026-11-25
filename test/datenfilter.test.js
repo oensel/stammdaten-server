@@ -12,7 +12,7 @@ const LEER = { nur_aktive: false, felder: null };
 const quelle = (recht, filter, extra = {}) => ({ art: 'vereinsrolle', schluessel: 'x', rechte: [recht], bereich: B, filter: filter ? { [recht]: { ...LEER, ...filter } } : {}, ...extra });
 const mit = (quellen, rechte = {}) => baueCtx({
   benutzer: { id: 'u' }, kontext: B, anwendung: 'a', jetzt: new Date(),
-  rechte: { quellen, app_scopes: ['mitglieder:lesen', 'mitglieder:schreiben', null], ...rechte },
+  rechte: { quellen, app_scopes: ['mitglieder:lesen', 'mitglieder:schreiben', 'mitglieder:kontakt', null], ...rechte },
 });
 const ziel = (extra = {}) => ({ vereine: ['V1'], heimatverein_id: 'V1', ...extra });
 const person = (p) => ziel({ person: { aktiv: true, rang: 5, lizenzen: [], ...p } });

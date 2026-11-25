@@ -147,3 +147,28 @@ describe('Ablauf, Entzug und verwaiste Delegationen', () => {
     expect((await ruf('GET', `/v2/delegationen?verein_id=${verein}`)).body.delegationen.filter((d) => d.geber_id === id.admin1)).toEqual([]);
   });
 });
+
+describe('Review', () => {
+  it('ein Trainer setzt kein Konto mit Delegation oder eigener Rolle zurück; niemand weist sich selbst eine Rolle zu', async () => {
+    // trainer1 hat oben die Zugehörigkeit verloren: wieder einsetzen
+    await t.pool.query(`update benutzer_vereine set status = 'freigegeben', rolle = 'mitglied' where benutzer_id = $1 and verein_id = $2`, [id.trainer1, verein]);
+    await t.pool.query(`update benutzer_rechte set geloescht_am = null where benutzer_id = $1`, [id.trainer1]);
+    const tr = (await t.login('trainer1')).body.access_token;
+    await t.pool.query('update delegationen set beendet_am = now()');
+    const zurueck = () => ruf('POST', `/benutzer/${id.schueler1}/passwort-zuruecksetzen`, undefined, tr);
+    const d = await delegiere({});
+    expect(d.status).toBe(201);
+    expect((await zurueck()).body).toMatchObject({ code: 'konto_geschuetzt' });
+    expect((await ruf('DELETE', `/v2/delegationen/${d.body.id}`)).status).toBe(200);
+    const rolle = (await ruf('POST', `/v2/vereine/${verein}/rollen`, { name: 'Pflege', berechtigungen: ['mitglieder:LESEN'] })).body.id;
+    const zuweisen = (benutzer_id) => ruf('POST', `/v2/vereine/${verein}/rollen/${rolle}/benutzer`, { benutzer_id });
+    expect((await zuweisen(id.admin1)).body).toMatchObject({ code: 'selbstvergabe' });
+    expect((await zuweisen(id.schueler1)).status).toBe(201);
+    expect((await zurueck()).body).toMatchObject({ code: 'konto_geschuetzt' });
+    await t.pool.query('update benutzer_vereinsrollen set beendet_am = now()');
+    expect((await zurueck()).status).toBe(200);
+  });
+  it('genau ein Bereich ist Pflicht', async () => {
+    expect((await delegiere({ verein_id: undefined })).status).toBe(400);
+  });
+});

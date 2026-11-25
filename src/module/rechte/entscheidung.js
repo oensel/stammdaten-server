@@ -81,13 +81,16 @@ export function listenbereich(ctx, recht, { judopassdaten = false } = {}) {
 const FELDER = { person: PERSON_FELDER };
 const LESERECHT = { person: 'mitglieder:LESEN' };
 
-/** Felder, die eine Quelle für ein Recht freigibt. Verbandsrollen sehen nie Kontaktdaten (E10). */
+/** Felder, die eine Quelle für ein Recht freigibt. Im Verbandsbereich gibt es nie Kontaktdaten (E10), auch nicht delegiert. */
 function felderVon(q, recht, art) {
   const gruppen = FELDER[art];
   const erlaubt = q.filter?.[recht]?.felder ?? Object.keys(gruppen);
   const namen = erlaubt.flatMap((f) => (Object.hasOwn(gruppen, f) ? gruppen[f] : Object.values(gruppen).some((g) => g.includes(f)) ? [f] : []));
-  return q.art === 'verbandsrolle' ? namen.filter((n) => !(gruppen.kontakt ?? []).includes(n)) : namen;
+  return q.bereich.art === 'verband' ? namen.filter((n) => !(gruppen.kontakt ?? []).includes(n)) : namen;
 }
+
+// Kontaktdaten gehen nur an Apps mit mitglieder:kontakt, auch die eigenen und die des Super-Admins
+const appVerbietet = (ctx, art, n) => (FELDER[art].kontakt ?? []).includes(n) && !ctx.rechte.app_scopes.includes('mitglieder:kontakt');
 
 const verlangeArt = (art) => { if (!Object.hasOwn(FELDER, art)) throw new Error(`Unbekannte Datenart: ${art}`); };
 
@@ -99,12 +102,13 @@ export function projiziere(ctx, art, datensatz, ziel) {
   const namen = ctx.rechte.super_admin || ziel.eigen
     ? Object.values(FELDER[art]).flat()
     : ctx.rechte.quellen.filter((q) => erlaubtQuelle(ctx, q, recht, ziel)).flatMap((q) => felderVon(q, recht, art));
-  return Object.fromEntries(Object.entries(datensatz).filter(([k]) => namen.includes(k)));
+  return Object.fromEntries(Object.entries(datensatz).filter(([k]) => namen.includes(k) && !appVerbietet(ctx, art, k)));
 }
 
 /** Schreiben: eine einzige Quelle muss Ziel und alle genannten Felder erlauben (Filter werden nicht kombiniert). */
 export function darfFelder(ctx, recht, art, namen, ziel) {
   verlangeArt(art);
+  if (namen.some((n) => appVerbietet(ctx, art, n))) return false;
   // Feste Regel (FR-18): die Person ab 14 und Benutzer mit Änderungszugriff pflegen genau die Kontaktdaten, in jedem Kontext
   if (recht === 'mitglieder:AENDERN' && ziel.eigen_kontakt && ctx.benutzer && !scopeFehlt(ctx, recht) && namen.every((n) => FELDER[art].kontakt?.includes(n))) return true;
   if (!darf(ctx, recht, ziel)) return false;

@@ -3,7 +3,7 @@
 //   POST /benutzer/:id/passwort-zuruecksetzen       neues Startpasswort (Kinder ohne E-Mail)
 import { tx } from '../db.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { auditiere, hatVerbandsrolle, pruefeBearer, widerrufeAlle } from '../auth.js';
+import { auditiere, hatSonderrechte, hatVerbandsrolle, pruefeBearer, widerrufeAlle } from '../auth.js';
 import { hashSecret, startpasswort } from '../passwords.js';
 
 export default async function benutzerRoutes(app) {
@@ -76,7 +76,7 @@ export default async function benutzerRoutes(app) {
     // Nie Konten übernehmbar machen, die mehr sind als ein reiner Vereinszugang: Super-Admins, Konten in mehreren Vereinen oder mit Verbandsrolle
     if (ziel.ist_super_admin || ziel.vereine !== 1 || await hatVerbandsrolle(pool, ziel.id)) throw forbidden('Dieses Konto darf nicht zurückgesetzt werden', 'konto_geschuetzt');
     // Trainer: nur reine Schüler-Zugänge (Rolle Mitglied, keine Rechte)
-    if (!admin && (ziel.rolle !== 'mitglied' || ziel.rechte > 0)) throw forbidden('Trainer dürfen nur Schüler-Zugänge zurücksetzen', 'konto_geschuetzt');
+    if (!admin && (ziel.rolle !== 'mitglied' || ziel.rechte > 0 || await hatSonderrechte(pool, ziel.id))) throw forbidden('Trainer dürfen nur Schüler-Zugänge zurücksetzen', 'konto_geschuetzt');
     if (ziel.id === claims.sub) throw forbidden('Das eigene Passwort bitte unter „Mein Konto“ ändern', 'eigenes_konto');
     const start = startpasswort();
     await tx(pool, async (db) => {

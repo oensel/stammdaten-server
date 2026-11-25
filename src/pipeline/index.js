@@ -33,6 +33,7 @@ async function ladeCtx(app, req) {
   if (claims.geraet_id) benutzer.ist_super_admin = false;
   const alleVerbandsrollen = claims.geraet_id ? [] : await ladeVerbandsrollen(null, app.pool, { benutzer_id: benutzer.id });
   const app_scopes = anwendung.scopes;
+  const geraet = !!claims.geraet_id;
   const basis = { benutzer: Object.freeze({ id: benutzer.id }), anwendung: anwendung.schluessel, jetzt };
   const vereinId = gewaehlt || claims.verein_id;
   // FR-15: genau ein Kontext. Verbandsrollen wirken nur im Kontext ihres Verbands, Vereinsrechte nur im Verein.
@@ -49,7 +50,7 @@ async function ladeCtx(app, req) {
   }
   if (!vereinId) {
     const superAdmin = benutzer.ist_super_admin;
-    return baueCtx({ ...basis, rechte: { app_scopes, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
+    return baueCtx({ ...basis, rechte: { app_scopes, geraet, super_admin: superAdmin, scopes: superAdmin ? wirksameScopes({ superAdmin }, anwendung.scopes) : [] } });
   }
   let k;
   try {
@@ -62,7 +63,7 @@ async function ladeCtx(app, req) {
   return baueCtx({
     ...basis, kontext,
     rechte: {
-      app_scopes,
+      app_scopes, geraet,
       quellen: await ladeQuellen(null, app.pool, { kontext, benutzerId: benutzer.id, jetzt, rolle: k.rolle, rechte: k.rechte }),
       rolle: k.rolle, rechte: k.rechte, super_admin: k.super_admin,
       scopes: wirksameScopes({ rolle: k.rolle, rechte: k.rechte, superAdmin: k.super_admin }, anwendung.scopes),
@@ -124,7 +125,7 @@ export const zweiterFaktor = (pool, cfg) => {
   const krypto = { verschluesseln: (t) => verschluessele(t, cfg.schluesselKek), entschluesseln: (w) => entschluessele(w, cfg.schluesselKek) };
   return {
     benutzer: (id) => zugang.mfaBenutzerLesen(ctx(), pool, { id }),
-    pruefen: (id, eingabe) => zugang.zweitenFaktorPruefen(ctx(), pool, { id, eingabe, ...krypto }),
+    pruefen: (id, eingabe, db = pool) => zugang.zweitenFaktorPruefen(ctx(), db, { id, eingabe, ...krypto }),
     einrichten: (u) => zugang.totpEinrichten(ctx(), pool, { id: u.id, benutzername: u.benutzername, ...krypto }),
     neueBackupCodes: (id) => zugang.backupCodesErneuern(ctx(), pool, { id }),
     bestaetigen: (u, eingabe) => zugang.totpBestaetigen(ctx(), pool, { id: u.id, eingabe, ...krypto }),

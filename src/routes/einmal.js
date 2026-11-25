@@ -53,7 +53,8 @@ export default async function einmalRoutes(app) {
     await tx(pool, async (db) => {
       if (!(await verbrauche(db, t.id))) throw unauthorized(UNGUELTIG, 'link_ungueltig');
       await db.query(
-        `update benutzer set passwort_hash = $2, muss_passwort_aendern = false, fehlversuche = 0, pin_fehlversuche = 0, gesperrt_bis = null, pin_hash = null,
+        `update benutzer set passwort_hash = $2, muss_passwort_aendern = false, pin_fehlversuche = 0, pin_hash = null,
+                fehlversuche = case when ist_super_admin then fehlversuche else 0 end, gesperrt_bis = case when ist_super_admin then gesperrt_bis end,
                 email_bestaetigt_am = coalesce(email_bestaetigt_am, now()), passwort_geaendert_am = now(), geaendert_am = now() where id = $1`, [u.id, hash]);
       await widerrufeAlle(db, u.id);
     });

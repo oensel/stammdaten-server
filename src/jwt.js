@@ -11,14 +11,14 @@ export function signJwt(payload, { kid, privateKey }, typ = 'at+jwt') {
 }
 
 /** Payload oder null (falsche Signatur, abgelaufen, falsche aud/iss). */
-export function verifyJwt(token, keys, { aud, iss } = {}) {
+export function verifyJwt(token, keys, { aud, iss, typ = 'at+jwt' } = {}) {
   if (typeof token !== 'string') return null;
   const t = token.split('.');
   if (t.length !== 3) return null;
   try {
     const kopf = JSON.parse(Buffer.from(t[0], 'base64url').toString());
     const key = keys.publicKeys.get(kopf.kid);
-    if (kopf.alg !== 'EdDSA' || !key) return null;
+    if (kopf.alg !== 'EdDSA' || kopf.typ !== typ || !key) return null;
     if (!verify(null, Buffer.from(`${t[0]}.${t[1]}`), key, Buffer.from(t[2], 'base64url'))) return null;
     const p = JSON.parse(Buffer.from(t[1], 'base64url').toString());
     if (typeof p.exp !== 'number' || p.exp <= Math.floor(Date.now() / 1000)) return null;

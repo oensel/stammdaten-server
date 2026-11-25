@@ -5,7 +5,7 @@ import { conflict, fehler, forbidden, unauthorized } from './errors.js';
 import { signJwt, verifyJwt } from './jwt.js';
 import * as audit from './module/audit/dienst.js';
 import { baueCtx } from './pipeline/ctx.js';
-import { ladeVerbandsrollen } from './module/rechte/dienst.js';
+import { beendeKonto, hatVereinssonderrechte, ladeVerbandsrollen } from './module/rechte/dienst.js';
 import { neuesToken, sha256 } from './passwords.js';
 import { wirksameScopes } from './scopes.js';
 
@@ -78,13 +78,19 @@ export async function ladeVerbandskontext(db, benutzer, verbandId) {
 }
 
 /** Hat der Benutzer eine aktive Verbandsrolle? Solche Konten darf ein Verein nicht zurücksetzen. */
-export const hatVerbandsrolle = async (db, id) => (await ladeVerbandsrollen(null, db, { benutzer_id: id })).length > 0;
+export const hatVerbandsrolle = async (db, id) => (await ladeVerbandsrollen(null, db, { benutzer_id: id })).length > 0
+  || hatVereinssonderrechte({ jetzt: new Date() }, db, { benutzer_id: id, nur_verband: true });
+/** Eigene Vereinsrolle oder wirksame Delegation: kein reiner Schüler-Zugang mehr. */
+export const hatSonderrechte = (db, id) => hatVereinssonderrechte({ jetzt: new Date() }, db, { benutzer_id: id });
+/** Kontolöschung: Ämter, Vereinsrollen und Delegationen enden mit. */
+export const beendeKontorechte = (db, claims) => beendeKonto(altCtx(claims), db, { benutzer_id: claims.sub });
 
 /** Audit der Altwege (NFR-18): Akteur, Rolle und Verein aus den Claims. Immer in der Transaktion der Änderung. */
-export const auditiere = (db, claims, eintrag) => audit.schreiben(baueCtx({
+const altCtx = (claims) => baueCtx({
   benutzer: { id: claims.sub }, kontext: claims.verein_id ? { art: 'verein', id: claims.verein_id } : null,
   rechte: { rolle: claims.rolle ?? null, super_admin: !!claims.super_admin }, anwendung: claims.azp || claims.aud, jetzt: new Date(),
-}), db, eintrag);
+});
+export const auditiere = (db, claims, eintrag) => audit.schreiben(altCtx(claims), db, eintrag);
 
 /** Aktuelle Mail-Adresse eines aktiven Benutzers, sonst null. */
 export const ladeMailAdresse = async (db, id) =>
@@ -183,14 +189,16 @@ export function baueAccessToken(app, { benutzer, kontext, anwendung, geraetId, s
 }
 
 /** Refresh-Token speichern + Antwort bauen. prev = bisheriges Token derselben Familie (Rotation). */
-export async function stelleAus(app, db, { benutzer, kontext, anwendung, sitzungAnwendungId = anwendung.id, geraetId = null, art = 'normal', familieId = randomUUID(), prevId = null }) {
+export async function stelleAus(app, db, { benutzer, kontext, anwendung, sitzungAnwendungId = anwendung.id, geraetId = null, art = 'normal', familieId = randomUUID(), prevId = null, mfa = false }) {
   const cfg = app.cfg;
   const rt = neuesToken();
   const tage = art === 'geraet' ? cfg.geraetTokenTage : cfg.refreshTage;
   const ins = await db.query(
-    `insert into refresh_tokens (benutzer_id, anwendung_id, verein_id, geraet_id, familie_id, art, token_hash, laeuft_ab_am, verband_id)
-     values ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(days => $8), $9) returning id`,
-    [benutzer.id, sitzungAnwendungId, kontext.verein_id, geraetId, familieId, art, sha256(rt), tage, kontext.verband_id ?? null]);
+    `insert into refresh_tokens (benutzer_id, anwendung_id, verein_id, geraet_id, familie_id, art, token_hash, laeuft_ab_am, verband_id, mfa)
+     values ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(days => $8), $9, $10 or exists (select 1 from refresh_tokens where familie_id = $5 and mfa)) returning id, mfa`,
+    [benutzer.id, sitzungAnwendungId, kontext.verein_id, geraetId, familieId, art, sha256(rt), tage, kontext.verband_id ?? null, mfa]);
+  // Anmeldungen ohne zweiten Faktor (vor der Pflicht, vor der Ernennung) lassen sich weder erneuern noch in einen Kontext wechseln
+  if (benutzer.ist_super_admin && cfg.zweiFaktorPflicht && !ins.rows[0].mfa) throw unauthorized('Bitte mit zweitem Faktor neu anmelden', 'zweiter_faktor_noetig');
   if (prevId) await db.query('update refresh_tokens set ersetzt_durch = $2 where id = $1', [prevId, ins.rows[0].id]);
   const vereineInfo = benutzer.muss_passwort_aendern ? undefined : await ladeVereineMap(db, benutzer);
   const { token, claims } = baueAccessToken(app, { benutzer, kontext, anwendung, geraetId, sid: familieId, vereineInfo });
