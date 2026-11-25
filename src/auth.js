@@ -340,3 +340,7 @@ export async function pruefeAnwendungsToken(app, req, { vereinId, scope = null }
   if (!frei) throw forbidden('Dieser Verein ist der Anwendung nicht freigegeben', 'verein_nicht_freigegeben');
   return { anw, claims };
 }
+
+/** Freigegebene Vereins-Admins: [{ benutzer_id }], als Empfänger von Benachrichtigungen (Worker und Pipeline reichen sie hinein). */
+export const ladeVereinsAdmins = async (db, vereinId) => (await db.query(
+  `select benutzer_id from benutzer_vereine where verein_id = $1 and rolle = 'admin' and status = 'freigegeben' and geloescht_am is null`, [vereinId])).rows;

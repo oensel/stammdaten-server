@@ -71,3 +71,39 @@ export const zugriffRuht = (db, { id, jetzt }) => eine(db, `update personen_zugr
 export const zugriffFreischalten = (db, { id, bis }) => eine(db,
   `update personen_zugriffe set freigeschaltet_bis = $2, ruht_seit = null where id = $1 returning ${ZUGRIFF}`, [id, bis]);
 export const abfrageMerken = (db, { id, tag }) => db.query('update personen set zugriffe_abgefragt_am = $2 where id = $1', [id, tag]);
+
+// ---- Mitgliedschaftsantrag ----
+export const personZuPass = async (db, { nummer, nachname, geburtsdatum }) => (await eine(db, 'select person_zu_pass($1, $2, $3::date) as id', [nummer, nachname, geburtsdatum])).id;
+/** Sperrt je Verein und Benutzer (immer in dieser Reihenfolge), damit parallele Versuche die Grenze nicht überholen. */
+export async function fehlversucheSperren(db, vereinId, benutzerId) {
+  await db.query('select pg_advisory_xact_lock(hashtextextended($1::text, 2))', [vereinId]);
+  await db.query('select pg_advisory_xact_lock(hashtextextended($1::text, 3))', [benutzerId]);
+}
+export const fehlversuche = (db, { vereinId, benutzerId, seit }) => eine(db,
+  `select count(*) filter (where verein_id = $1)::int as verein, count(*) filter (where benutzer_id = $2)::int as benutzer
+     from antrag_fehlversuche where zeitpunkt > $3 and (verein_id = $1 or benutzer_id = $2)`, [vereinId, benutzerId, seit]);
+export const fehlversuchMerken = (db, { vereinId, benutzerId, jetzt }) => db.query(
+  'insert into antrag_fehlversuche (verein_id, benutzer_id, zeitpunkt) values ($1,$2,$3)', [vereinId, benutzerId, jetzt]);
+/** Auch gelöschte und ausgetretene: je Person und Verein gibt es nur eine Zeile. */
+export const mitgliedschaftIn = (db, { personId, vereinId }) => eine(db,
+  'select id, status, geloescht_am from mitglieder where person_id = $1 and verein_id = $2 for update', [personId, vereinId]);
+export const mitgliedschaftReaktivieren = (db, { id, eintritt, von }) => eine(db,
+  `update mitglieder set status = 'aktiv', austritt = null, kuendigung_am = null, geloescht_am = null, eintritt = coalesce($2::date, eintritt), geaendert_von = $3
+    where id = $1 returning id, mitgliedsnr, status, eintritt`, [id, eintritt, von]);
+
+const ANTRAG = `id, verein_id, person_id, vorname, nachname, geburtsdatum, judopass_nr, angaben, gestellt_von, erfasst_von, status, grund, erstellt_am, entschieden_am, erinnert_am, change_seq`;
+export const antragAnlegen = (db, a) => eine(db,
+  `insert into mitgliedschaftsantraege (verein_id, person_id, vorname, nachname, geburtsdatum, judopass_nr, angaben, gestellt_von, erfasst_von, erstellt_am, geaendert_von)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning ${ANTRAG}`,
+  [a.vereinId, a.personId, a.vorname, a.nachname, a.geburtsdatum, a.judopassNr, a.angaben ?? null, a.gestelltVon ?? null, a.erfasstVon ?? null, a.jetzt, a.von]);
+export const antragSperren = (db, id) => eine(db, `select ${ANTRAG} from mitgliedschaftsantraege where id = $1 for update`, [id]);
+export const antragLesen = (db, { id, vereinId }) => eine(db, `select ${ANTRAG} from mitgliedschaftsantraege where id = $1 and verein_id = $2`, [id, vereinId]);
+export const antraegeVon = async (db, { vereinId, status }) => (await db.query(
+  `select ${ANTRAG} from mitgliedschaftsantraege where verein_id = $1 and ($2::text is null or status = $2) order by erstellt_am, id`, [vereinId, status])).rows;
+export const antraegeGestelltVon = async (db, benutzerId) => (await db.query(
+  `select ${ANTRAG} from mitgliedschaftsantraege where gestellt_von = $1 order by erstellt_am desc, id`, [benutzerId])).rows;
+export const offeneAntraege = async (db) => (await db.query(`select id, verein_id from mitgliedschaftsantraege where status = 'offen' order by erstellt_am, id`)).rows;
+export const antragEntscheiden = (db, a) => eine(db,
+  `update mitgliedschaftsantraege set status = $2, person_id = $3, grund = $4, entschieden_von = $5, entschieden_am = $6, geaendert_von = $5, angaben = null
+    where id = $1 returning ${ANTRAG}`, [a.id, a.status, a.personId, a.grund ?? null, a.von, a.jetzt]);
+export const antragErinnert = (db, { id, jetzt }) => db.query('update mitgliedschaftsantraege set erinnert_am = $2 where id = $1', [id, jetzt]);

@@ -1,9 +1,9 @@
 import { inTransaktion } from '../../db.js';
-import { badRequest, conflict, fehler, notFound } from '../../errors.js';
+import { badRequest, conflict, fehler, notFound, tooMany } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
-import { landesverbandVon, vereinFuer } from '../organisation/dienst.js';
-import { darf, darfFelder, ladeZiel, projiziere } from '../rechte/dienst.js';
+import { fristFuer, landesverbandVon, vereinFuer } from '../organisation/dienst.js';
+import { darf, darfFelder, ladeZiel, projiziere, verlangeAuf } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 /**
@@ -321,3 +321,190 @@ export const abfrageBeantworten = (ctx, db, { id, entscheidungen }) => inTransak
   await daten.abfrageMerken(c, { id, tag: heute(ctx) });
   return { zugriffe: await daten.zugriffeVon(c, id) };
 });
+
+// ---- Mitgliedschaftsantrag (FR-7, E70, E100) ----
+const FEHLVERSUCHE_VEREIN = 20; const FEHLVERSUCHE_BENUTZER = 5; // je 24 Stunden; der Benutzerwert hält Einzelne davon ab, den Verein zu sperren
+const abgelehnt = () => fehler(422, 'Der Antrag kann nicht angenommen werden', 'antrag_abgelehnt');
+const nurOffen = { ein_offener_mitgliedschaftsantrag: [409, 'Es gibt schon einen offenen Antrag', 'antrag_offen'] };
+Object.assign(VERSTOSS, nurOffen);
+
+/** Ordnet über Pass-Nr., Nachname und Geburtsdatum zu. Ein Fehlversuch wird in eigener Transaktion gezählt, auch wenn der Antrag scheitert. */
+async function personZuPass(ctx, db, { verein_id, judopass_nr, nachname, geburtsdatum }) {
+  const id = await inTransaktion(db, async (c) => {
+    await daten.fehlversucheSperren(c, verein_id, ctx.benutzer.id);
+    const seit = new Date(ctx.jetzt.getTime() - 86_400_000);
+    const n = await daten.fehlversuche(c, { vereinId: verein_id, benutzerId: ctx.benutzer.id, seit });
+    if (n.verein >= FEHLVERSUCHE_VEREIN || n.benutzer >= FEHLVERSUCHE_BENUTZER) throw tooMany('Zu viele fehlgeschlagene Anträge – bitte später erneut');
+    const treffer = await daten.personZuPass(c, { nummer: judopass_nr, nachname, geburtsdatum });
+    if (!treffer) await daten.fehlversuchMerken(c, { vereinId: verein_id, benutzerId: ctx.benutzer.id, jetzt: ctx.jetzt });
+    return treffer;
+  });
+  if (!id) throw abgelehnt();
+  return id;
+}
+
+async function antragsVerein(ctx, c, id) {
+  const verein = await vereinFuer(ctx, c, { id });
+  if (!verein) throw notFound();
+  if (verein.aufgeloest_am) throw conflict('Der Verein ist aufgelöst', 'verein_aufgeloest');
+  return verein;
+}
+
+/** Ausgetretene dürfen neu beantragen (der Verein reaktiviert dann auf Wunsch), bestehende Mitglieder nicht. */
+async function pruefeNichtMitglied(c, personId, vereinId) {
+  const m = await daten.mitgliedschaftIn(c, { personId, vereinId });
+  if (m && !m.geloescht_am && m.status !== 'ausgetreten') throw conflict('Die Mitgliedschaft besteht schon', 'mitgliedschaft_vorhanden');
+}
+
+const eigenSicht = ({ id, verein_id, vorname, nachname, geburtsdatum, status, grund, erstellt_am, entschieden_am, change_seq }) => ({ id, verein_id, vorname, nachname, geburtsdatum, status, grund, erstellt_am, entschieden_am, change_seq });
+/** Vor der Annahme nur die Antragsdaten; die Person erst danach. */
+const vereinsSicht = (a) => ({ ...eigenSicht(a), judopass_nr: a.judopass_nr, art: a.erfasst_von ? 'schriftlich' : 'online', ...(a.status === 'angenommen' ? { person_id: a.person_id } : {}) });
+
+async function antragEinfuegen(ctx, c, a, { konten, verein }) {
+  const neu = await daten.antragAnlegen(c, { ...a, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+  await benachrichtigung.senden(ctx, c, { empfaenger: (await konten.adminsVon(c, verein.id)).filter((x) => x.benutzer_id !== ctx.benutzer.id), art: 'antrag_eingegangen', daten: {} });
+  if (a.person) {
+    // Person und Erziehungsberechtigte erfahren von Anträgen, die jemand anderes für sie stellt
+    const kreis = new Set([a.person.benutzer_id, ...(await daten.zugriffeVon(c, a.person.id)).filter((z) => z.art !== 'bevollmaechtigt' && zugriffWirkt(a.person, z, heute(ctx))).map((z) => z.benutzer_id)]);
+    kreis.delete(null); kreis.delete(undefined); kreis.delete(ctx.benutzer.id);
+    await benachrichtigung.senden(ctx, c, { empfaenger: [...kreis].map((benutzer_id) => ({ benutzer_id })), art: 'antrag_gestellt', daten: { vorname: a.person.vorname, verein: verein.name } });
+  }
+  return neu;
+}
+
+/** Online: die eigene Person ab 14 oder ein Kind aus dem Konto; mit Pass-Nr. die zugeordnete Person. */
+export async function antragStellen(ctx, db, { verein_id, person_id = null, judopass_nr = null, vorname = null, nachname = null, geburtsdatum = null, konten }) {
+  if (ctx.rechte.geraet || ctx.rechte.unbestaetigt || !appSchreibt(ctx) || !darf(ctx, 'mitgliedschaftsantrag:ANLEGEN')) throw notFound();
+  const mitPass = !!judopass_nr;
+  if (mitPass ? (person_id || !vorname || !nachname || !geburtsdatum) : (!person_id || vorname || nachname || geburtsdatum)) {
+    throw badRequest('Entweder person_id oder judopass_nr mit Vorname, Nachname und Geburtsdatum angeben');
+  }
+  if (mitPass) {
+    await antragsVerein(ctx, db, verein_id);
+    const selbst = await daten.personZuKonto(db, ctx.benutzer.id);
+    if (selbst && !mindestens(selbst, 14, heute(ctx))) throw notFound();
+  }
+  const id = mitPass ? await personZuPass(ctx, db, { verein_id, judopass_nr, nachname, geburtsdatum }) : person_id;
+  return schreibe(db, async (c) => {
+    const person = await daten.personSperren(c, id);
+    if (!person) throw notFound();
+    if (!mitPass) {
+      const z = await zieleFuer(ctx, c, person);
+      const erlaubt = (z.selbst && mindestens(person, 14, heute(ctx))) || ['erziehungsberechtigt', 'vormund'].includes(z.zugriff?.art);
+      if (!erlaubt) throw notFound();
+      if (!person.geburtsdatum) throw fehler(422, 'Das Geburtsdatum der Person fehlt', 'geburtsdatum_fehlt');
+    }
+    const verein = await antragsVerein(ctx, c, verein_id);
+    await pruefeNichtMitglied(c, id, verein_id);
+    const angabe = mitPass ? { vorname, nachname, geburtsdatum } : person;
+    return eigenSicht(await antragEinfuegen(ctx, c, {
+      vereinId: verein_id, personId: id, vorname: angabe.vorname, nachname: angabe.nachname, geburtsdatum: angabe.geburtsdatum, judopassNr: judopass_nr, gestelltVon: ctx.benutzer.id, person,
+    }, { konten, verein }));
+  });
+}
+
+/** Der Verein erfasst einen schriftlichen Antrag; ohne Pass-Nr. entsteht bei der Annahme eine neue Person. */
+export async function antragErfassen(ctx, db, { verein_id, person, judopass_nr = null, konten }) {
+  await verlangeAuf(ctx, db, 'mitgliedschaftsantrag:AENDERN', { vereine: [verein_id] });
+  if (person.geburtsdatum > heute(ctx)) throw fehler(422, 'Das Geburtsdatum liegt in der Zukunft', 'geburtsdatum_ungueltig');
+  const kontakt = ['strasse', 'plz', 'ort', 'land', 'email', 'telefon'].some((f) => f in person);
+  if (kontakt && !ctx.rechte.app_scopes.includes('mitglieder:kontakt')) throw fehler(422, 'Kontaktdaten sind über diese App nicht erlaubt', 'feld_nicht_erlaubt');
+  await antragsVerein(ctx, db, verein_id);
+  const id = judopass_nr ? await personZuPass(ctx, db, { verein_id, judopass_nr, nachname: person.nachname, geburtsdatum: person.geburtsdatum }) : null;
+  return schreibe(db, async (c) => {
+    const verein = await antragsVerein(ctx, c, verein_id);
+    const gefunden = id && await daten.personSperren(c, id);
+    if (id) await pruefeNichtMitglied(c, id, verein_id);
+    return vereinsSicht(await antragEinfuegen(ctx, c, {
+      vereinId: verein_id, personId: id, vorname: person.vorname, nachname: person.nachname, geburtsdatum: person.geburtsdatum, judopassNr: judopass_nr,
+      angaben: id ? null : person, erfasstVon: ctx.benutzer.id, person: gefunden,
+    }, { konten, verein }));
+  });
+}
+
+export async function antraegeLesen(ctx, db, { verein_id, status = null }) {
+  await verlangeAuf(ctx, db, 'mitgliedschaftsantrag:LESEN', { vereine: [verein_id] });
+  return { antraege: (await daten.antraegeVon(db, { vereinId: verein_id, status })).map(vereinsSicht) };
+}
+export async function antragLesen(ctx, db, { verein_id, id }) {
+  await verlangeAuf(ctx, db, 'mitgliedschaftsantrag:LESEN', { vereine: [verein_id] });
+  const a = await daten.antragLesen(db, { id, vereinId: verein_id });
+  if (!a) throw notFound();
+  return vereinsSicht(a);
+}
+export async function meineAntraege(ctx, db) {
+  return { antraege: (await daten.antraegeGestelltVon(db, ctx.benutzer.id)).map(eigenSicht) };
+}
+
+export const antragZurueckziehen = (ctx, db, { id }) => inTransaktion(db, async (c) => {
+  const a = await daten.antragSperren(c, id);
+  if (!a || a.gestellt_von !== ctx.benutzer.id || ctx.rechte.geraet) throw notFound();
+  if (a.status !== 'offen') throw conflict('Der Antrag ist schon entschieden', 'status_unzulaessig');
+  return eigenSicht(await daten.antragEntscheiden(c, { id, status: 'zurueckgezogen', personId: a.person_id, von: ctx.benutzer.id, jetzt: ctx.jetzt }));
+});
+
+/** Annahme: Mitgliedschaft mit nächster Nummer; Heimatverein und Pass bleiben unverändert. */
+export async function antragEntscheiden(ctx, db, { verein_id, id, version, entscheidung, reaktivieren = false, eintritt = null, grund = null }) {
+  await verlangeAuf(ctx, db, 'mitgliedschaftsantrag:AENDERN', { vereine: [verein_id] });
+  return schreibe(db, async (c) => {
+    const a = await daten.antragSperren(c, id);
+    if (!a || a.verein_id !== verein_id) throw notFound();
+    if (a.change_seq !== version) throw fehler(412, 'Der Datensatz wurde inzwischen geändert', 'version_veraltet');
+    if (a.status !== 'offen') throw conflict('Der Antrag ist schon entschieden', 'status_unzulaessig');
+    const verein = await vereinFuer(ctx, c, { id: verein_id });
+    const von = ctx.benutzer.id;
+    let personId = a.person_id; let mitgliedschaft = null;
+    if (entscheidung === 'annehmen') {
+      await antragsVerein(ctx, c, verein_id);
+      if (!personId) personId = (await daten.personAnlegen(c, { ...a.angaben, vereinId: verein_id, von })).id;
+      else await daten.personSperren(c, personId);
+      const alt = await daten.mitgliedschaftIn(c, { personId, vereinId: verein_id });
+      if (alt) {
+        await pruefeNichtMitglied(c, personId, verein_id);
+        if (!reaktivieren) throw conflict('Die Person war schon Mitglied; zum Reaktivieren bestätigen', 'mitglied_ausgetreten');
+        mitgliedschaft = await daten.mitgliedschaftReaktivieren(c, { id: alt.id, eintritt, von });
+      } else mitgliedschaft = await daten.mitgliedschaftAnlegen(c, { personId, vereinId: verein_id, vorname: a.vorname, nachname: a.nachname, eintritt, von });
+    }
+    const status = entscheidung === 'annehmen' ? 'angenommen' : 'abgelehnt';
+    const neu = await daten.antragEntscheiden(c, { id, status, personId, grund, von, jetzt: ctx.jetzt });
+    if (a.gestellt_von) await benachrichtigung.senden(ctx, c, { empfaenger: [{ benutzer_id: a.gestellt_von }], art: 'antrag_entschieden', daten: { verein: verein.name, ergebnis: status } });
+    return { ...vereinsSicht(neu), ...(mitgliedschaft ? { mitgliedschaft } : {}) };
+  });
+}
+
+/** Zeitpunkt, an dem eine Frist nach `ab` abläuft; Monate kalendarisch. */
+function ablauf(ab, { wert, einheit }) {
+  if (einheit === 'tage') return new Date(ab.getTime() + wert * 86_400_000);
+  const d = new Date(ab); d.setUTCMonth(d.getUTCMonth() + wert);
+  return d;
+}
+
+/** Job: erinnert die Vereins-Admins einmal und lässt Anträge verfallen (fristFuer je Verein). */
+export async function antragsfristen(ctx, db, { adminsVon }) {
+  const fristen = new Map(); let erinnert = 0; let verfallen = 0;
+  for (const { id, verein_id } of await daten.offeneAntraege(db)) {
+    if (!fristen.has(verein_id)) {
+      fristen.set(verein_id, {
+        erinnerung: await fristFuer(ctx, db, { art: 'mitgliedschaftsantrag_erinnerung', verband_id: verein_id }),
+        verfall: await fristFuer(ctx, db, { art: 'mitgliedschaftsantrag_verfall', verband_id: verein_id }),
+      });
+    }
+    const f = fristen.get(verein_id);
+    await inTransaktion(db, async (c) => {
+      const a = await daten.antragSperren(c, id);
+      if (a?.status !== 'offen') return;
+      if (ablauf(a.erstellt_am, f.verfall) <= ctx.jetzt) {
+        await daten.antragEntscheiden(c, { id, status: 'verfallen', personId: a.person_id, von: null, jetzt: ctx.jetzt });
+        const verein = await vereinFuer(ctx, c, { id: verein_id });
+        const empfaenger = a.gestellt_von ? [{ benutzer_id: a.gestellt_von }] : await adminsVon(c, verein_id);
+        await benachrichtigung.senden(ctx, c, { empfaenger, art: 'antrag_verfallen', daten: { verein: verein?.name ?? '' } });
+        verfallen++;
+      } else if (!a.erinnert_am && ablauf(a.erstellt_am, f.erinnerung) <= ctx.jetzt) {
+        await daten.antragErinnert(c, { id, jetzt: ctx.jetzt });
+        await benachrichtigung.senden(ctx, c, { empfaenger: await adminsVon(c, verein_id), art: 'antrag_erinnerung', daten: {} });
+        erinnert++;
+      }
+    });
+  }
+  return { erinnert, verfallen };
+}

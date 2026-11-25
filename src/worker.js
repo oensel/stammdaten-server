@@ -1,12 +1,12 @@
 // Worker-Prozess (AD-10): läuft aus demselben Image wie die API, Start mit `node src/worker.js`.
 import { fileURLToPath } from 'node:url';
-import { ladeMailAdresse } from './auth.js';
+import { ladeMailAdresse, ladeVereinsAdmins } from './auth.js';
 import { loadConfig } from './config.js';
 import { createPool, mitSperre } from './db.js';
 import { createMailer } from './mailer.js';
 import { verlangeAktuellesSchema } from './migrate.js';
 import { versendeMails } from './module/benachrichtigung/dienst.js';
-import { volljaehrigkeitPruefen } from './module/personen/dienst.js';
+import { antragsfristen, volljaehrigkeitPruefen } from './module/personen/dienst.js';
 import { systemCtx } from './pipeline/ctx.js';
 
 const log = (text) => console.log(`[worker] ${new Date().toISOString()} ${text}`);
@@ -15,6 +15,7 @@ const log = (text) => console.log(`[worker] ${new Date().toISOString()} ${text}`
 const JOBS = {
   mailversand: (ctx, pool, { mailer, abbruch }) => versendeMails(ctx, pool, { mailer, adresseVon: ladeMailAdresse, abbruch }),
   volljaehrigkeit: (ctx, pool) => volljaehrigkeitPruefen(ctx, pool),
+  antragsfristen: (ctx, pool) => antragsfristen(ctx, pool, { adminsVon: ladeVereinsAdmins }),
 };
 
 /** Führt einen Job unter seinem Advisory-Lock aus; läuft er schon anderswo, passiert nichts (null). */

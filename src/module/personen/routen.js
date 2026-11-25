@@ -71,4 +71,34 @@ export default function routen(v2) {
     },
     handler: (ctx, db, { params, body }) => dienst.abfrageBeantworten(ctx, db, { id: params.id, ...body }),
   });
+
+  const ANTRAEGE = '/vereine/:id/mitgliedschaftsantraege';
+  const mitAntrag = objekt({ id: uuid, antrag_id: uuid }, ['id', 'antrag_id']);
+  const pass = { ...text, maxLength: 60 };
+  v2({
+    method: 'POST', url: '/mitgliedschaftsantraege', status: 201,
+    schema: { body: objekt({ verein_id: uuid, person_id: uuid, judopass_nr: pass, vorname: text, nachname: text, geburtsdatum: datum }, ['verein_id']) },
+    handler: (ctx, db, { body, konten }) => dienst.antragStellen(ctx, db, { ...body, konten }),
+  });
+  v2({ method: 'GET', url: '/ich/mitgliedschaftsantraege', handler: (ctx, db) => dienst.meineAntraege(ctx, db) });
+  v2({ method: 'DELETE', url: '/mitgliedschaftsantraege/:id', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.antragZurueckziehen(ctx, db, params) });
+  v2({
+    method: 'POST', url: ANTRAEGE, status: 201,
+    schema: { params: mitId, body: objekt({ person: objekt(PERSON, ['vorname', 'nachname', 'geburtsdatum']), judopass_nr: pass }, ['person']) },
+    handler: (ctx, db, { params, body, konten }) => dienst.antragErfassen(ctx, db, { verein_id: params.id, ...body, konten }),
+  });
+  v2({
+    method: 'GET', url: ANTRAEGE,
+    schema: { params: mitId, querystring: objekt({ status: { type: 'string', enum: ['offen', 'angenommen', 'abgelehnt', 'zurueckgezogen', 'verfallen'] } }) },
+    handler: (ctx, db, { params, query }) => dienst.antraegeLesen(ctx, db, { verein_id: params.id, status: query.status }),
+  });
+  v2({ method: 'GET', url: `${ANTRAEGE}/:antrag_id`, schema: { params: mitAntrag }, handler: (ctx, db, { params }) => dienst.antragLesen(ctx, db, { verein_id: params.id, id: params.antrag_id }) });
+  v2({
+    method: 'PATCH', url: `${ANTRAEGE}/:antrag_id`, ifMatch: true,
+    schema: {
+      params: mitAntrag,
+      body: objekt({ entscheidung: { type: 'string', enum: ['annehmen', 'ablehnen'] }, reaktivieren: { type: 'boolean' }, eintritt: datum, grund: { type: 'string', maxLength: 500 } }, ['entscheidung']),
+    },
+    handler: (ctx, db, { params, body, version }) => dienst.antragEntscheiden(ctx, db, { verein_id: params.id, id: params.antrag_id, version, ...body }),
+  });
 }
