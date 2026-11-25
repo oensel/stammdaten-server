@@ -118,3 +118,29 @@ export const austrittVollziehen = (db, { id, von }) => eine(db,
   `update mitglieder set status = 'ausgetreten', geaendert_von = coalesce($2, geaendert_von) where id = $1 returning ${MITGLIED}`, [id, von]);
 export const faelligeAustritte = async (db, tag) => (await db.query(
   `select id, verein_id from mitglieder where status <> 'ausgetreten' and austritt <= $1::date and geloescht_am is null and anonymisiert_am is null order by austritt, id`, [tag])).rows;
+
+// ---- Gruppen ----
+const GRUPPE = 'id, verein_id, name, trainingszeiten, sortierung, change_seq';
+export const gruppenVon = async (db, vereinId) => (await db.query(
+  `select ${GRUPPE} from gruppen where verein_id = $1 and geloescht_am is null order by sortierung, lower(name), id`, [vereinId])).rows;
+export const gruppeLesen = (db, { id, vereinId }) => eine(db, `select ${GRUPPE} from gruppen where id = $1 and verein_id = $2 and geloescht_am is null`, [id, vereinId]);
+export const gruppeSperren = (db, { id, vereinId }) => eine(db, `select ${GRUPPE} from gruppen where id = $1 and verein_id = $2 and geloescht_am is null for update`, [id, vereinId]);
+export const gruppeAnlegen = (db, g) => eine(db,
+  `insert into gruppen (verein_id, name, trainingszeiten, sortierung, geaendert_von) values ($1,$2,$3,$4,$5) returning ${GRUPPE}`, [g.vereinId, g.name, g.trainingszeiten, g.sortierung, g.von]);
+export const gruppeAendern = (db, g) => eine(db,
+  `update gruppen set name = $2, trainingszeiten = $3, sortierung = $4, geaendert_von = $5 where id = $1 returning ${GRUPPE}`, [g.id, g.name, g.trainingszeiten, g.sortierung, g.von]);
+export const gruppeLoeschen = (db, { id, jetzt, von }) => db.query('update gruppen set geloescht_am = $2, geaendert_von = $3 where id = $1', [id, jetzt, von]);
+export const gruppeLeeren = (db, { id, jetzt, von }) => db.query(
+  'update mitglied_gruppen set geloescht_am = $2, geaendert_von = $3 where gruppe_id = $1 and geloescht_am is null', [id, jetzt, von]);
+export const gruppenMitglieder = async (db, { id, vereinId }) => (await db.query(
+  `select m.id, m.person_id, m.mitgliedsnr, m.vorname, m.nachname, m.status from mitglied_gruppen g join mitglieder m on m.id = g.mitglied_id
+    where g.gruppe_id = $1 and g.verein_id = $2 and g.geloescht_am is null and m.geloescht_am is null order by lower(m.nachname), lower(m.vorname), m.id`, [id, vereinId])).rows;
+/** Unveränderte Zuordnungen bleiben unberührt, damit der Abgleich sie nicht erneut liefert. */
+export const gruppeEintragen = (db, g) => db.query(
+  `insert into mitglied_gruppen (verein_id, mitglied_id, gruppe_id, geaendert_von) values ($1,$2,$3,$4)
+   on conflict (mitglied_id, gruppe_id) do update set geloescht_am = null, geaendert_von = excluded.geaendert_von where mitglied_gruppen.geloescht_am is not null`,
+  [g.vereinId, g.mitgliedId, g.id, g.von]);
+export const gruppeAustragen = async (db, { id, mitgliedId, jetzt, von }) => (await db.query(
+  'update mitglied_gruppen set geloescht_am = $3, geaendert_von = $4 where gruppe_id = $1 and mitglied_id = $2 and geloescht_am is null', [id, mitgliedId, jetzt, von])).rowCount === 1;
+export const gruppenAustragen = (db, { mitgliedId, jetzt, von }) => db.query(
+  'update mitglied_gruppen set geloescht_am = $2, geaendert_von = coalesce($3, geaendert_von) where mitglied_id = $1 and geloescht_am is null', [mitgliedId, jetzt, von]);

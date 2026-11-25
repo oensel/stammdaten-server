@@ -519,6 +519,7 @@ async function verlangeVerein(ctx, db, verein_id, recht) {
 /** Der Austritt wirkt ab dem Austrittstag: Vereinsrollen und Direktrechte des verknüpften Benutzers enden, die Zugehörigkeit als Mitglied bleibt. */
 async function vollzieheAustritt(ctx, c, m, konten) {
   const neu = await daten.austrittVollziehen(c, { id: m.id, von: ctx.benutzer?.id ?? null });
+  await daten.gruppenAustragen(c, { mitgliedId: m.id, jetzt: ctx.jetzt, von: ctx.benutzer?.id ?? null });
   const person = await daten.personLesen(c, m.person_id);
   const z = await konten.zuMitglied(c, { verein_id: m.verein_id, mitglied_id: m.id, benutzer_id: person.benutzer_id });
   if (z) {
@@ -559,4 +560,64 @@ export async function austritteVollziehen(ctx, db, { konten }) {
     });
   }
   return { vollzogen };
+}
+
+// ---- Gruppen (FR-77) ----
+// Nur im Kontext des eigenen Vereins; Rechte wie die Mitglieder, dazu der Gruppen-Scope der App
+async function verlangeGruppen(ctx, db, verein_id, schreiben) {
+  if (!ctx.rechte.app_scopes.includes(schreiben ? 'gruppen:schreiben' : 'gruppen:lesen')) throw notFound();
+  if (schreiben) return verlangeVerein(ctx, db, verein_id, 'mitglieder:AENDERN');
+  if (ctx.kontext?.art !== 'verein' || ctx.kontext.id !== verein_id) throw notFound();
+  return verlangeAuf(ctx, db, 'mitglieder:LESEN', mitgliedsZiel(verein_id, 'aktiv'));
+}
+/** Datenfilter (z. B. nur Aktive) gelten je Mitglied. */
+const mitgliedsZiel = (verein_id, status) => ({ vereine: [verein_id], person: { aktiv: status === 'aktiv', rang: null, lizenzen: [] } });
+Object.assign(VERSTOSS, { gruppen_name_uq: [409, 'Eine Gruppe mit diesem Namen gibt es schon', 'name_vergeben'] });
+
+export async function gruppenLesen(ctx, db, { verein_id }) {
+  await verlangeGruppen(ctx, db, verein_id, false);
+  return { gruppen: await daten.gruppenVon(db, verein_id) };
+}
+export async function gruppenMitgliederLesen(ctx, db, { verein_id, id }) {
+  await verlangeGruppen(ctx, db, verein_id, false);
+  if (!await daten.gruppeLesen(db, { id, vereinId: verein_id })) throw notFound();
+  return { mitglieder: (await daten.gruppenMitglieder(db, { id, vereinId: verein_id })).filter((m) => darf(ctx, 'mitglieder:LESEN', mitgliedsZiel(verein_id, m.status))) };
+}
+export async function gruppeAnlegen(ctx, db, { verein_id, name, trainingszeiten = null, sortierung = 0 }) {
+  await verlangeGruppen(ctx, db, verein_id, true);
+  return schreibe(db, (c) => daten.gruppeAnlegen(c, { vereinId: verein_id, name: name.trim(), trainingszeiten, sortierung, von: ctx.benutzer.id }));
+}
+export async function gruppeAendern(ctx, db, { verein_id, id, version, aenderung }) {
+  await verlangeGruppen(ctx, db, verein_id, true);
+  return schreibe(db, async (c) => {
+    const alt = await daten.gruppeSperren(c, { id, vereinId: verein_id });
+    if (!alt) throw notFound();
+    pruefeVersion(alt, version);
+    const neu = { ...alt, ...aenderung };
+    return daten.gruppeAendern(c, { ...neu, name: neu.name.trim(), von: ctx.benutzer.id });
+  });
+}
+/** Löschhinweis statt Löschen, damit Apps es im Abgleich erfahren; die Zuordnungen enden mit. */
+export async function gruppeLoeschen(ctx, db, { verein_id, id, version }) {
+  await verlangeGruppen(ctx, db, verein_id, true);
+  return schreibe(db, async (c) => {
+    const alt = await daten.gruppeSperren(c, { id, vereinId: verein_id });
+    if (!alt) throw notFound();
+    pruefeVersion(alt, version);
+    await daten.gruppeLeeren(c, { id, jetzt: ctx.jetzt, von: ctx.benutzer.id });
+    await daten.gruppeLoeschen(c, { id, jetzt: ctx.jetzt, von: ctx.benutzer.id });
+    return { id, geloescht: true };
+  });
+}
+export async function mitgliedZuordnen(ctx, db, { verein_id, id, mitglied_id, zugeordnet }) {
+  await verlangeGruppen(ctx, db, verein_id, true);
+  return schreibe(db, async (c) => {
+    // Reihenfolge Mitglied, Gruppe: Austritt und Löschen der Gruppe laufen nicht daneben vorbei
+    const m = await daten.mitgliedSperren(c, { id: mitglied_id, vereinId: verein_id });
+    if (!m || !await daten.gruppeSperren(c, { id, vereinId: verein_id })) throw notFound();
+    if (zugeordnet && m.status === 'ausgetreten') throw conflict('Ausgetretene Mitglieder gehören keiner Gruppe an', 'status_unzulaessig');
+    if (zugeordnet) await daten.gruppeEintragen(c, { id, vereinId: verein_id, mitgliedId: mitglied_id, von: ctx.benutzer.id });
+    else if (!await daten.gruppeAustragen(c, { id, mitgliedId: mitglied_id, jetzt: ctx.jetzt, von: ctx.benutzer.id })) throw notFound();
+    return { gruppe_id: id, mitglied_id, zugeordnet };
+  });
 }

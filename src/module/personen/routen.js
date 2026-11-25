@@ -110,4 +110,30 @@ export default function routen(v2) {
     },
     handler: (ctx, db, { params, body, version, konten }) => dienst.austrittSetzen(ctx, db, { verein_id: params.id, mitglied_id: params.mitglied_id, version, ...body, konten }),
   });
+
+  const GRUPPEN = '/vereine/:id/gruppen';
+  const GRUPPE = { name: { ...text, maxLength: 100 }, trainingszeiten: leer({ ...text, maxLength: 500 }), sortierung: { type: 'integer', minimum: 0, maximum: 10000 } };
+  const mitGruppe = objekt({ id: uuid, gruppe_id: uuid }, ['id', 'gruppe_id']);
+  const zuordnung = objekt({ id: uuid, gruppe_id: uuid, mitglied_id: uuid }, ['id', 'gruppe_id', 'mitglied_id']);
+  const gruppe = (p) => ({ verein_id: p.id, id: p.gruppe_id });
+  v2({ method: 'GET', url: GRUPPEN, schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.gruppenLesen(ctx, db, { verein_id: params.id }) });
+  v2({
+    method: 'POST', url: GRUPPEN, status: 201, schema: { params: mitId, body: objekt(GRUPPE, ['name']) },
+    handler: (ctx, db, { params, body }) => dienst.gruppeAnlegen(ctx, db, { verein_id: params.id, ...body }),
+  });
+  v2({
+    method: 'PATCH', url: `${GRUPPEN}/:gruppe_id`, ifMatch: true, schema: { params: mitGruppe, body: { ...objekt(GRUPPE), minProperties: 1 } },
+    handler: (ctx, db, { params, body, version }) => dienst.gruppeAendern(ctx, db, { ...gruppe(params), version, aenderung: body }),
+  });
+  v2({
+    method: 'DELETE', url: `${GRUPPEN}/:gruppe_id`, ifMatch: true, schema: { params: mitGruppe },
+    handler: (ctx, db, { params, version }) => dienst.gruppeLoeschen(ctx, db, { ...gruppe(params), version }),
+  });
+  v2({ method: 'GET', url: `${GRUPPEN}/:gruppe_id/mitglieder`, schema: { params: mitGruppe }, handler: (ctx, db, { params }) => dienst.gruppenMitgliederLesen(ctx, db, gruppe(params)) });
+  for (const [method, zugeordnet] of [['PUT', true], ['DELETE', false]]) {
+    v2({
+      method, url: `${GRUPPEN}/:gruppe_id/mitglieder/:mitglied_id`, schema: { params: zuordnung },
+      handler: (ctx, db, { params }) => dienst.mitgliedZuordnen(ctx, db, { ...gruppe(params), mitglied_id: params.mitglied_id, zugeordnet }),
+    });
+  }
 }
