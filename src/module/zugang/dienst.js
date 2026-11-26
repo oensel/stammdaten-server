@@ -206,11 +206,14 @@ export async function kontoFuerPersonAnlegen(ctx, c, { benutzername, vorname, na
   }
 }
 
-/** { fremd_von, eigene, eltern }: nur Adressen, die vor der Fremdvergabe bestätigt waren bzw. von selbst nicht fremd vergebenen Konten. */
-export async function bestaetigungsAdresse(ctx, db, { benutzer_id, eltern_ids }) {
-  const u = await daten.fremdVergabe(db, benutzer_id);
-  return u && { fremd_von: u.fremd_vergeben_von, eigene: u.eigene, eltern: await daten.sichereAdressen(db, eltern_ids) };
+/** { fremd_durch, eigene }: alle Vergebenden und die vor der ersten Fremdvergabe bestätigte Adresse; sperrt das Konto bis zum Ende der Transaktion. */
+export async function bestaetigungsAdresse(ctx, c, { benutzer_id }) {
+  await daten.kontoSperren(c, benutzer_id);
+  const u = await daten.fremdVergabe(c, benutzer_id);
+  return u && { fremd_durch: u.fremd_vergeben_durch, eigene: u.eigene };
 }
+/** Bestätigte Adressen selbst bestätigter Konten. */
+export const sichereAdressen = (ctx, c, { benutzer_ids }) => daten.sichereAdressen(c, benutzer_ids);
 
 export async function bestaetigungAnlegen(ctx, c, { benutzer_id }) {
   const token = neuesToken();
@@ -220,10 +223,20 @@ export async function bestaetigungAnlegen(ctx, c, { benutzer_id }) {
   return token;
 }
 
-/** Öffentlich: der Link beweist den Zugang zur Adresse. */
-export const kontoBestaetigen = (ctx, db, { token }) => inTransaktion(db, async (c) => {
-  const b = await daten.bestaetigungVerbrauchen(c, { hash: sha256(token), jetzt: ctx.jetzt });
-  if (!b || !await daten.fremdVergabeAufheben(c, b)) throw notFound('Link ungültig oder abgelaufen');
-  await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'konto', objekt_id: b.benutzer_id, neu: { bestaetigt: true } });
-  return { ok: true };
-});
+/** Öffentlich: der Link beweist den Zugang zur Adresse. Das neue Passwort löst das dem Vergebenden bekannte ab, alle Sitzungen enden. */
+export async function kontoBestaetigen(ctx, db, { token, passwort_neu, sitzungenBeenden }) {
+  const ungueltig = () => notFound('Link ungültig oder abgelaufen');
+  const hash = sha256(token);
+  const konto = await daten.bestaetigungKonto(db, { hash, jetzt: ctx.jetzt });
+  if (!konto) throw ungueltig();
+  pruefeNeuesPasswort(passwort_neu, konto.benutzername); // vor dem Verbrauchen: Tippfehler kosten den Link nicht
+  const passwort = await hashSecret(passwort_neu);
+  return inTransaktion(db, async (c) => {
+    const b = await daten.bestaetigungVerbrauchen(c, { hash, jetzt: ctx.jetzt });
+    if (!b || !await daten.fremdVergabeAufheben(c, { id: b.id, passwort, jetzt: ctx.jetzt })) throw ungueltig();
+    await daten.adresslinksVerbrauchen(c, { benutzerId: b.benutzer_id, jetzt: ctx.jetzt });
+    await sitzungenBeenden(c, b.benutzer_id);
+    await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'konto', objekt_id: b.benutzer_id, neu: { bestaetigt: true } });
+    return { ok: true };
+  });
+}

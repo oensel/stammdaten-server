@@ -1,5 +1,5 @@
 // Anfrage-Pipeline für /v2 (AD-2, AD-9): Token → Kontext → ctx → genau ein Dienst; Fehler als Problem-JSON.
-import { aufMitgliedsrolle, ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, ladeVereinsAdmins, pruefeBearer, zugehoerigkeitZuMitglied } from '../auth.js';
+import { aufMitgliedsrolle, kontoAktiv, ladeAnwendung, ladeBenutzerFuerKontext, ladeKontext, ladeVerbandskontext, ladeVereinsAdmins, pruefeBearer, verbraucheEinladungen, widerrufeAlle, zugehoerigkeitZuMitglied } from '../auth.js';
 import { badRequest, errorHandler, fehler, notFound } from '../errors.js';
 import { wirksameScopes } from '../scopes.js';
 import { ladeQuellen, ladeVerbandsrollen } from '../module/rechte/dienst.js';
@@ -135,10 +135,11 @@ export const zweiterFaktor = (pool, cfg) => {
 
 /** Kontodienste, die das Modul personen braucht, ohne zugang zu importieren (kein Pfeil dorthin); wie `adresseVon` beim Mailversand. */
 const konten = (app) => ({
-  adminsVon: ladeVereinsAdmins, zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle,
+  adminsVon: ladeVereinsAdmins, zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle, verbraucheEinladungen, aktiv: kontoAktiv,
+  sitzungenBeenden: (c, id) => widerrufeAlle(c, id), adressen: zugang.sichereAdressen,
   anlegen: zugang.kontoFuerPersonAnlegen, adresse: zugang.bestaetigungsAdresse, linkAnlegen: zugang.bestaetigungAnlegen,
   senden: (an, token) => app.mailer.send({
     to: an, subject: 'Zugang bestätigen',
-    text: `Für einen Zugang wurde ein Startpasswort vergeben. Nur wenn der Zugang dir oder deinem Kind gehört, bestätige ihn bitte (48 Stunden gültig):\n\n${link(app.cfg, 'konto-bestaetigen', token)}\n`,
+    text: `Für einen Zugang wurde ein Startpasswort vergeben. Nur wenn der Zugang dir oder deinem Kind gehört, bestätige ihn bitte und lege dabei ein neues Passwort fest (48 Stunden gültig):\n\n${link(app.cfg, 'konto-bestaetigen', token)}\n`,
   }),
 });

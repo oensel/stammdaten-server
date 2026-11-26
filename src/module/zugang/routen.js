@@ -30,8 +30,8 @@ export default function routen(v2) {
     handler: (ctx, db, { body }) => dienst.registrieren(ctx, db, body),
   });
   v2({
-    method: 'POST', url: '/auth/konto-bestaetigen', oeffentlich: true, schema: { body: objekt({ token }, ['token']) },
-    handler: (ctx, db, { body }) => dienst.kontoBestaetigen(ctx, db, body),
+    method: 'POST', url: '/auth/konto-bestaetigen', oeffentlich: true, schema: { body: objekt({ token, passwort_neu: { type: 'string', maxLength: 200 } }, ['token', 'passwort_neu']) },
+    handler: (ctx, db, { body, konten }) => dienst.kontoBestaetigen(ctx, db, { ...body, sitzungenBeenden: konten.sitzungenBeenden }),
   });
   v2({
     method: 'POST', url: QR, status: 201,

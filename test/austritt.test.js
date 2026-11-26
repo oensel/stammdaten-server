@@ -83,3 +83,40 @@ it('Versionen, Datumsregeln und der letzte Admin', async () => {
   expect((await setze({ austritt: '2030-06-15' })).body.code).toBe('letzter_admin');
   expect((await zeile()).status).toBe('aktiv');
 });
+
+it('eine offene Einladung gibt nach dem Austritt nichts zurück', async () => {
+  await q(`insert into einmal_tokens (benutzer_id, zweck, verein_id, rolle, token_hash, laeuft_ab_am) values ($1,'einladung',$2,'admin',repeat('a', 64),'2031-01-01')`, [id.trainer1, jc]);
+  expect((await setze({ austritt: '2030-06-15' })).status).toBe(200);
+  expect(await q(`select 1 from einmal_tokens where zweck = 'einladung' and benutzt_am is null`)).toEqual([]);
+});
+
+it('Mitgliederverwaltung allein setzt keinen Admin ab, auch nicht zum Termin; gefilterte Felder reichen nie', async () => {
+  const delegiere = async (filter = null) => {
+    await q('delete from delegationen');
+    await q(`insert into delegationen (empfaenger_id, geber_id, verein_id, recht, operation, datenfilter_id, gueltig_von, gueltig_bis, delegiert_aus_quelle, delegiert_aus_schluessel)
+      values ($1,$2,$3,'mitglieder','AENDERN',(select id from datenfilter where schluessel = $4),'2030-01-01','2030-12-31','rolle','admin')`, [id.pruefer1, id.admin1, jc, filter]);
+  };
+  await delegiere('alle_ohne_kontakt');
+  expect((await setze({ austritt: '2030-12-31' }, await tok('pruefer1'))).status).toBe(404);
+  await delegiere();
+  await q(`update benutzer_vereine set rolle = 'admin' where benutzer_id = $1`, [id.trainer1]);
+  for (const austritt of ['2030-06-15', '2030-12-31']) expect((await setze({ austritt }, await tok('pruefer1'))).status).toBe(404);
+  expect((await setze({ austritt: '2030-12-31' })).status).toBe(200); // ein Admin darf
+  await q(`update benutzer_vereine set rolle = 'mitglied' where benutzer_id = $1`, [id.trainer1]);
+  expect((await setze({ austritt: '2030-06-15' }, await tok('pruefer1'))).status).toBe(200);
+});
+
+it('zwei Admins können nicht gleichzeitig austreten', async () => {
+  const [{ id: lena }] = await q(`select id from mitglieder where vorname = 'Lena'`);
+  await q(`update benutzer_vereine set mitglied_id = null where verein_id = $1`, [jc]);
+  await q(`update benutzer_vereine set rolle = 'mitglied' where verein_id = $1`, [jc]);
+  await q(`update benutzer_vereine set rolle = 'admin', mitglied_id = $2 where benutzer_id = $1`, [id.admin1, lena]);
+  await q(`update benutzer_vereine set rolle = 'admin', mitglied_id = $2 where benutzer_id = $1`, [id.trainer1, thomas]);
+  await q('update mitglieder set eintritt = null where id = $1', [lena]);
+  const token = await tok('admin1');
+  const [l] = await q('select change_seq from mitglieder where id = $1', [lena]);
+  const raus = t.app.inject({ method: 'PATCH', url: `/v2/vereine/${jc}/mitglieder/${lena}/austritt`, payload: { austritt: '2030-06-15' }, headers: { authorization: `Bearer ${token}`, 'if-match': `"${l.change_seq}"` } });
+  const r = await Promise.all([raus, setze({ austritt: '2030-06-15' }, await tok('trainer1'))]);
+  expect(r.map((x) => x.statusCode ?? x.status).filter((s) => s === 200)).toHaveLength(1);
+  expect((await q(`select 1 from benutzer_vereine where verein_id = $1 and rolle = 'admin'`, [jc]))).toHaveLength(1);
+});

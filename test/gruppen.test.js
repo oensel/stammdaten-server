@@ -9,7 +9,8 @@ const tok = async (n, v) => (await t.login(n, v ? { verein_id: v } : {})).body.a
 beforeEach(async () => {
   t = await neueApp();
   baum = await verbandsbaum(t.pool);
-  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben,mitglieder:kontakt}' where schluessel = $1`, [CLIENT]);
+  await q(`update anwendungen set scopes = scopes || '{mitglieder:kontakt}' where schluessel = $1`, [CLIENT]);
+  await q(`update anwendungen set scopes = array_remove(scopes, 'mitglieder:schreiben') where schluessel = $1`, [CLIENT]); // wie Kyu-Manager-Pro
   jc = (await q(`select id from vereine where name = 'JC Demo'`))[0].id;
   b = await neuerVerein(t.pool, baum.kreis);
   await q('update vereine set verband_id = $2 where id = $1', [jc, baum.kreis]);
@@ -109,6 +110,7 @@ it('mit dem Austritt enden die Gruppen; Ausgetretene lassen sich nicht zuordnen'
   const z = `${basis()}/${g.id}/mitglieder/${lena}`;
   await ruf('PUT', z);
   const [{ change_seq }] = await q('select change_seq from mitglieder where id = $1', [lena]);
+  await q(`update anwendungen set scopes = scopes || '{mitglieder:schreiben}' where schluessel = $1`, [CLIENT]);
   await q('update mitglieder set eintritt = null where id = $1', [lena]);
   const [{ change_seq: cs }] = await q('select change_seq from mitglieder where id = $1', [lena]);
   expect(cs).not.toBe(change_seq);
