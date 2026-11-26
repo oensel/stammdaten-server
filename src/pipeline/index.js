@@ -136,7 +136,7 @@ export const zweiterFaktor = (pool, cfg) => {
 /** Kontodienste, die das Modul personen braucht, ohne zugang zu importieren (kein Pfeil dorthin); wie `adresseVon` beim Mailversand. */
 const konten = (app) => ({
   adminsVon: ladeVereinsAdmins, zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle, verbraucheEinladungen, aktiv: kontoAktiv,
-  sitzungenBeenden: (c, id) => widerrufeAlle(c, id), adressen: zugang.sichereAdressen,
+  sitzungenBeenden: (c, id) => widerrufeAlle(c, id), adressen: zugang.sichereAdressen, elternPasswort: zugang.passwortVonElternGesetzt,
   anlegen: zugang.kontoFuerPersonAnlegen, adresse: zugang.bestaetigungsAdresse, linkAnlegen: zugang.bestaetigungAnlegen,
   senden: (an, token) => app.mailer.send({
     to: an, subject: 'Zugang bestätigen',

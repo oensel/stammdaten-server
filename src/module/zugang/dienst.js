@@ -212,14 +212,18 @@ export async function bestaetigungsAdresse(ctx, c, { benutzer_id }) {
   const u = await daten.fremdVergabe(c, benutzer_id);
   return u && { fremd_durch: u.fremd_vergeben_durch, eigene: u.eigene };
 }
+export const passwortVonElternGesetzt = (ctx, db, { benutzer_id }) => daten.passwortVonElternGesetzt(db, benutzer_id);
 /** Bestätigte Adressen selbst bestätigter Konten. */
 export const sichereAdressen = (ctx, c, { benutzer_ids }) => daten.sichereAdressen(c, benutzer_ids);
 
-export async function bestaetigungAnlegen(ctx, c, { benutzer_id }) {
+export async function bestaetigungAnlegen(ctx, c, { benutzer_id, person = null, adresse = null, ueber_eltern = false }) {
   const token = neuesToken();
   await daten.kontoSperren(c, benutzer_id);
   if (await daten.bestaetigungenSeit(c, { id: benutzer_id, seit: new Date(ctx.jetzt.getTime() - 3_600_000) }) >= 3) throw tooMany('Zu viele Bestätigungslinks – bitte später erneut');
-  await daten.bestaetigungAnlegen(c, { id: benutzer_id, hash: sha256(token), jetzt: ctx.jetzt, ablauf: new Date(ctx.jetzt.getTime() + 48 * 3_600_000) });
+  await daten.bestaetigungAnlegen(c, {
+    id: benutzer_id, hash: sha256(token), jetzt: ctx.jetzt, ablauf: new Date(ctx.jetzt.getTime() + 48 * 3_600_000),
+    personId: person?.id ?? null, personSeit: person?.seit ?? null, adresse, ueberEltern: ueber_eltern,
+  });
   return token;
 }
 
@@ -233,7 +237,8 @@ export async function kontoBestaetigen(ctx, db, { token, passwort_neu, sitzungen
   const passwort = await hashSecret(passwort_neu);
   return inTransaktion(db, async (c) => {
     const b = await daten.bestaetigungVerbrauchen(c, { hash, jetzt: ctx.jetzt });
-    if (!b || !await daten.fremdVergabeAufheben(c, { id: b.id, passwort, jetzt: ctx.jetzt })) throw ungueltig();
+    if (!b || (b.person_id && !await daten.personEinloesen(c, { personId: b.person_id, seit: b.person_seit }))) throw ungueltig();
+    if (!await daten.fremdVergabeAufheben(c, { id: b.id, passwort, jetzt: ctx.jetzt })) throw ungueltig();
     await daten.adresslinksVerbrauchen(c, { benutzerId: b.benutzer_id, jetzt: ctx.jetzt });
     await sitzungenBeenden(c, b.benutzer_id);
     await audit.schreiben(ctx, c, { aktion: 'recht_vergeben', objekt_art: 'konto', objekt_id: b.benutzer_id, neu: { bestaetigt: true } });

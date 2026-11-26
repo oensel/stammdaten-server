@@ -19,7 +19,7 @@ export async function mitgliedschaftAnlegen(db, { personId, vereinId, vorname, n
 export const aufgabeAnlegen = (db, { art, verbandId, personId, jetzt, von }) => db.query(
   'insert into aufgaben (art, verband_id, person_id, erstellt_am, erstellt_von) values ($1,$2,$3,$4,$5)', [art, verbandId, personId, jetzt, von]);
 
-const PERSON = `id, vorname, nachname, geburtsdatum, geschlecht, nationalitaet, strasse, plz, ort, land, email, telefon, heimatverein_id, benutzer_id, email_gesetzt_von, zugriffe_abgefragt_am, change_seq`;
+const PERSON = `id, vorname, nachname, geburtsdatum, geschlecht, nationalitaet, strasse, plz, ort, land, email, telefon, heimatverein_id, benutzer_id, email_gesetzt_von, zugriffe_abgefragt_am, konto_unbestaetigt_seit, konto_vergeben_durch, change_seq`;
 export const personLesen = (db, id) => eine(db, `select ${PERSON} from personen where id = $1`, [id]);
 export const personSperren = (db, id) => eine(db, `select ${PERSON} from personen where id = $1 for no key update`, [id]);
 export const mitgliedschaften = async (db, personId) => (await db.query(

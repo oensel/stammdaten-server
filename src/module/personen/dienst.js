@@ -33,6 +33,8 @@ const heute = (ctx) => ctx.jetzt.toISOString().slice(0, 10);
 /** Hat die Person am Tag das Alter erreicht? Ohne Geburtsdatum nie. Am 29. Februar Geborene werden am 1. März älter. */
 const mindestens = (person, jahre, tag) => !!person.geburtsdatum && `${Number(person.geburtsdatum.slice(0, 4)) + jahre}${person.geburtsdatum.slice(4)}` <= tag;
 
+/** Nur diese Person (Einladung) oder das ganze Konto (fremdes Passwort) ist noch nicht bestätigt. */
+const unbestaetigt = (ctx, person) => !!ctx.rechte.unbestaetigt || (person?.benutzer_id === ctx.benutzer.id && !!person.konto_unbestaetigt_seit);
 const plusJahre = (tag, n) => { const d = new Date(`${tag}T00:00:00Z`); d.setUTCFullYear(d.getUTCFullYear() + n); return d.toISOString().slice(0, 10); };
 /** Ab 18 ruht jeder Zugriff ohne gültige Freischaltung; ohne Geburtsdatum wirkt keiner (E103). */
 const zugriffWirkt = (person, z, tag) => !!z && !!person.geburtsdatum && (z.art === 'vormund' || !mindestens(person, 18, tag) || (!!z.freigeschaltet_bis && z.freigeschaltet_bis >= tag));
@@ -53,7 +55,7 @@ async function zieleFuer(ctx, db, person) {
   return {
     ms, selbst, zugriff,
     lesen: await ladeZiel(ctx, db, { ...basis, vereine, eigen: selbst || !!zugriff }),
-    aendern: await ladeZiel(ctx, db, { ...basis, vereine: [person.heimatverein_id], eigen_kontakt: !ctx.rechte.unbestaetigt && ((selbst && mindestens(person, 14, tag)) || zugriff?.umfang === 'aendern') }),
+    aendern: await ladeZiel(ctx, db, { ...basis, vereine: [person.heimatverein_id], eigen_kontakt: !unbestaetigt(ctx, person) && ((selbst && mindestens(person, 14, tag)) || zugriff?.umfang === 'aendern') }),
   };
 }
 
@@ -121,7 +123,7 @@ const appSchreibt = (ctx) => ctx.rechte.app_scopes.includes('mitglieder:schreibe
 /** In welcher Eigenschaft verwaltet der Benutzer die Zugriffe? 'heimat' | 'person' | 'eltern' | null. */
 function verwaltetAls(ctx, person, z) {
   const bestaetigt = !ctx.rechte.unbestaetigt;
-  if (bestaetigt && z.selbst && mindestens(person, 18, heute(ctx))) return 'person';
+  if (bestaetigt && !unbestaetigt(ctx, person) && z.selbst && mindestens(person, 18, heute(ctx))) return 'person';
   // Heimatverein nur mit vollem Änderungsrecht im Kontext dieses Vereins; kein Feldfilter, keine Verbandsrolle
   if (ctx.kontext?.art === 'verein' && ctx.kontext.id === person.heimatverein_id
     && darfFelder(ctx, 'mitglieder:AENDERN', 'person', ['vorname', 'email'], z.aendern)) return 'heimat';
@@ -197,7 +199,7 @@ async function dokumentRechte(ctx, db, person) {
   if (!person) throw notFound();
   const z = await zieleFuer(ctx, db, person);
   const eigenLesen = z.lesen.eigen && darf(ctx, 'mitglieder:LESEN', z.lesen);
-  const eigen = eigenLesen && !ctx.rechte.unbestaetigt;
+  const eigen = eigenLesen && !unbestaetigt(ctx, person) && (!z.zugriff || !ctx.rechte.unbestaetigt);
   const c = { ...ctx, rechte: { ...ctx.rechte, super_admin: false } };
   const imHeimatverein = ctx.kontext?.art === 'verein' && ctx.kontext.id === person.heimatverein_id;
   const ziel = { ...z.aendern, eigen_kontakt: false };
@@ -272,13 +274,15 @@ export async function bestaetigungAnfordern(ctx, db, { konten }) {
     const tag = heute(ctx);
     const eltern = person?.geburtsdatum && !mindestens(person, 18, tag) ? (await daten.zugriffeVon(c, person.id)).filter((x) => x.art === 'erziehungsberechtigt') : [];
     const a = await konten.adresse(ctx, c, { benutzer_id });
-    if (!a) throw conflict('Das Konto ist schon bestätigt', 'schon_bestaetigt');
+    const offen = person?.konto_unbestaetigt_seit ? { id: person.id, seit: person.konto_unbestaetigt_seit } : null;
+    if (!a && !offen) throw conflict('Das Konto ist schon bestätigt', 'schon_bestaetigt');
     // Ein Zweitkonto, das ein Vergebender berechtigt hat, ist keine unabhängige Adresse
-    const befangen = new Set([...a.fremd_durch, ...(person ? await daten.zugriffeErteiltDurch(c, { personId: person.id, durch: a.fremd_durch }) : [])]);
-    const eigene = a.eigene ?? (person?.email && a.fremd_durch.length && !befangen.has(person.email_gesetzt_von) ? person.email : null);
+    const durch = [...(a?.fremd_durch ?? []), ...(offen ? person.konto_vergeben_durch : [])];
+    const befangen = new Set([...durch, ...(person ? await daten.zugriffeErteiltDurch(c, { personId: person.id, durch }) : [])]);
+    const eigene = a?.eigene ?? (person?.email && durch.length && !befangen.has(person.email_gesetzt_von) ? person.email : null);
     const ziel = eigene ? [eigene] : await konten.adressen(ctx, c, { benutzer_ids: eltern.map((x) => x.benutzer_id).filter((x) => !befangen.has(x)) });
     if (!ziel.length) throw conflict('Keine Adresse für die Bestätigung hinterlegt', 'adresse_fehlt');
-    return { an: ziel, token: await konten.linkAnlegen(ctx, c, { benutzer_id }) };
+    return { an: ziel, token: await konten.linkAnlegen(ctx, c, { benutzer_id, person: offen, adresse: eigene, ueber_eltern: !eigene }) };
   });
   for (const x of an) await konten.senden(x, token);
   return { ok: true };
@@ -297,20 +301,22 @@ export const volljaehrigkeitPruefen = (ctx, db) => inTransaktion(db, async (c) =
   return { ruhend };
 });
 
-async function abfrageStand(ctx, c, person) {
+async function abfrageStand(ctx, c, person, konten) {
   const z = await mitZielen(ctx, c, person);
   if (verwaltetAls(ctx, person, z) !== 'person') throw notFound();
   const zugriffe = (await daten.zugriffeVon(c, person.id)).filter((x) => x.art !== 'vormund');
   const zuletzt = person.zugriffe_abgefragt_am;
-  return { faellig: zugriffe.length > 0 && (!zuletzt || plusJahre(zuletzt, 1) <= heute(ctx)), zugriffe };
+  // Nutzerentscheid 2026-11-26: Haben Eltern das Konto bestätigt, nur ein Hinweis, das Passwort selbst zu ändern
+  const passwort_aendern = await konten.elternPasswort(ctx, c, { benutzer_id: ctx.benutzer.id });
+  return { faellig: zugriffe.length > 0 && (!zuletzt || plusJahre(zuletzt, 1) <= heute(ctx)), zugriffe, passwort_aendern };
 }
 
 /** Jahresfrage der volljährigen Person; die Oberfläche fragt nach der Anmeldung. */
-export const abfrageLesen = (ctx, db, { id }) => inTransaktion(db, async (c) => abfrageStand(ctx, c, await daten.personLesen(c, id)));
+export const abfrageLesen = (ctx, db, { id, konten }) => inTransaktion(db, async (c) => abfrageStand(ctx, c, await daten.personLesen(c, id), konten));
 
-export const abfrageBeantworten = (ctx, db, { id, entscheidungen }) => inTransaktion(db, async (c) => {
+export const abfrageBeantworten = (ctx, db, { id, entscheidungen, konten }) => inTransaktion(db, async (c) => {
   const person = await daten.personSperren(c, id);
-  const { zugriffe } = await abfrageStand(ctx, c, person);
+  const { zugriffe } = await abfrageStand(ctx, c, person, konten);
   if (!appSchreibt(ctx)) throw notFound();
   const wahl = new Map(entscheidungen.map((e) => [e.zugriff_id, e.behalten]));
   if (wahl.size !== entscheidungen.length || wahl.size !== zugriffe.length || !zugriffe.every((z) => wahl.has(z.id))) throw fehler(422, 'Bitte über jeden Zugriff genau einmal entscheiden', 'entscheidung_fehlt');
@@ -369,7 +375,7 @@ const vereinsSicht = (a) => {
 
 /** Wer für die Person Anträge stellt und zurückzieht: sie selbst ab 14, Eltern und Vormund mit Änderungszugriff. */
 const VERTRETER = ['erziehungsberechtigt', 'vormund'];
-const vertritt = (ctx, person, z) => (z.selbst && mindestens(person, 14, heute(ctx))) || (z.zugriff?.umfang === 'aendern' && VERTRETER.includes(z.zugriff.art));
+const vertritt = (ctx, person, z) => (z.selbst && !unbestaetigt(ctx, person) && mindestens(person, 14, heute(ctx))) || (z.zugriff?.umfang === 'aendern' && VERTRETER.includes(z.zugriff.art));
 
 /** Person und Erziehungsberechtigte bzw. Vormund. */
 const betroffene = async (ctx, c, person) => [person.benutzer_id, ...(await daten.zugriffeVon(c, person.id))
