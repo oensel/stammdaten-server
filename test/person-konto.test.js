@@ -160,10 +160,49 @@ it('eine Einladung verknüpft die Person nur unbestätigt, außer die Adresse ha
   expect(await q('select benutzer_id from personen where id = $1', [lena])).toEqual(await q(`select id as benutzer_id from benutzer where benutzername = 'lena.trick'`));
   expect(await erteilen(token)).toBe(404);
   expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).body.code).toBe('adresse_fehlt');
+  // nur die Person ist unbestätigt, nicht das Konto
+  expect(await q(`select fremd_vergeben_am from benutzer where benutzername = 'lena.trick'`)).toEqual([{ fremd_vergeben_am: null }]);
+  await q(`update personen set email = 'echt@example.org', geaendert_von = null where id = $1`, [lena]);
+  expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(202);
+  expect(mails.at(-1).to).toBe('echt@example.org');
+  expect((await bestaetige(linkToken())).status).toBe(200);
+  expect(await q(`select email from benutzer where benutzername = 'lena.trick'`)).toEqual([{ email: 'echt@example.org' }]);
+  expect(await erteilen(await tok('lena.trick', NEU))).toBe(201);
+  await q('delete from personen_zugriffe where benutzer_id = $1', [id.pruefer1]);
   await ohneKonto();
   await q(`update personen set email = 'lena@example.org', geaendert_von = null where id = $1`, [lena]);
   token = await lade('lena@example.org', 'lena.echt');
   expect(await erteilen(token)).toBe(201);
+});
+
+it('Elternrechte bleiben, wenn eine Einladung das Konto mit der eigenen Person verknüpft', async () => {
+  const [{ id: thomas, person_id: tp }] = await q(`select id, person_id from mitglieder where vorname = 'Thomas'`);
+  await q('update benutzer_vereine set mitglied_id = null where mitglied_id = $1', [thomas]);
+  await q(`update personen set geburtsdatum = '1980-01-01' where id = $1`, [tp]);
+  expect((await t.api('POST', '/einladungen', { email: 'eltern@example.org', mitglied_id: thomas }, await tok('admin1'))).status).toBe(202);
+  expect((await t.api('POST', '/auth/einladung-annehmen', { token: linkToken(), passwort: PW })).status).toBe(200);
+  expect(await q('select konto_unbestaetigt_seit is not null as offen from personen where id = $1', [tp])).toEqual([{ offen: true }]);
+  const token = await tok('eltern1');
+  expect((await t.api('GET', url('/dokumente'), null, token)).status).toBe(200);
+  expect((await erteile('eltern1', { benutzer_id: id.pruefer1, art: 'bevollmaechtigt' })).status).toBe(201);
+  expect((await t.api('POST', `/v2/personen/${tp}/zugriffe`, { benutzer_id: id.pruefer1, art: 'bevollmaechtigt', umfang: 'lesen' }, token)).status).toBe(404);
+});
+
+it('mit 18 weist die Jahresfrage auf ein von den Eltern gesetztes Passwort hin', async () => {
+  await ohneKonto();
+  await q('update personen set email = null where id = $1', [lena]);
+  await q(`update benutzer set email = 'eltern2@example.org', email_bestaetigt_am = now() where id = $1`, [id.pruefer1]);
+  await q(`insert into personen_zugriffe (person_id, benutzer_id, art, umfang, erteilt_am) values ($1,$2,'erziehungsberechtigt','aendern',now())`, [lena, id.pruefer1]);
+  const { body } = await konto('eltern1');
+  const token = await uebernehmen('lena.neu', body.startpasswort);
+  expect((await t.api('POST', '/v2/ich/konto-bestaetigung', null, token)).status).toBe(202);
+  expect(mails.at(-1).to).toBe('eltern2@example.org');
+  expect((await bestaetige(linkToken())).status).toBe(200);
+  uhr = new Date('2032-05-02T12:00:00Z');
+  const s = await tok('lena.neu', NEU);
+  expect((await t.api('GET', url('/zugriffsabfrage'), null, s)).body.passwort_aendern).toBe(true);
+  await t.api('PATCH', '/ich', { passwort_alt: NEU, passwort_neu: 'jetzt-mein-eigenes-Passwort-1' }, s);
+  expect((await t.api('GET', url('/zugriffsabfrage'), null, await tok('lena.neu', 'jetzt-mein-eigenes-Passwort-1'))).body.passwort_aendern).toBe(false);
 });
 
 it('Vormund nur durch den Heimatverein mit bestätigtem Nachweis', async () => {

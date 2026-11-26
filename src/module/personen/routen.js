@@ -62,14 +62,14 @@ export default function routen(v2) {
     handler: (ctx, db, { params, body, konten }) => dienst.kontoAnlegen(ctx, db, { id: params.id, ...body, konten }),
   });
   v2({ method: 'POST', url: '/ich/konto-bestaetigung', status: 202, handler: (ctx, db, { konten }) => dienst.bestaetigungAnfordern(ctx, db, { konten }) });
-  v2({ method: 'GET', url: '/personen/:id/zugriffsabfrage', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.abfrageLesen(ctx, db, params) });
+  v2({ method: 'GET', url: '/personen/:id/zugriffsabfrage', schema: { params: mitId }, handler: (ctx, db, { params, konten }) => dienst.abfrageLesen(ctx, db, { ...params, konten }) });
   v2({
     method: 'POST', url: '/personen/:id/zugriffsabfrage',
     schema: {
       params: mitId,
       body: objekt({ entscheidungen: { type: 'array', maxItems: 100, items: objekt({ zugriff_id: uuid, behalten: { type: 'boolean' } }, ['zugriff_id', 'behalten']) } }, ['entscheidungen']),
     },
-    handler: (ctx, db, { params, body }) => dienst.abfrageBeantworten(ctx, db, { id: params.id, ...body }),
+    handler: (ctx, db, { params, body, konten }) => dienst.abfrageBeantworten(ctx, db, { id: params.id, ...body, konten }),
   });
 
   const ANTRAEGE = '/vereine/:id/mitgliedschaftsantraege';

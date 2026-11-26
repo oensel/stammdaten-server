@@ -116,21 +116,30 @@ export const sichereAdressen = async (db, ids) => (await db.query(
 export const kontoSperren = (db, id) => db.query('select 1 from benutzer where id = $1 for update', [id]);
 export const bestaetigungenSeit = async (db, { id, seit }) => (await eine(db,
   'select count(*)::int n from konto_bestaetigungen where benutzer_id = $1 and erstellt_am > $2', [id, seit])).n;
-export const bestaetigungAnlegen = (db, { id, hash, jetzt, ablauf }) => db.query(
-  `insert into konto_bestaetigungen (benutzer_id, fremd_vergeben_am, token_hash, erstellt_am, laeuft_ab_am)
-   select id, fremd_vergeben_am, $2, $3, $4 from benutzer where id = $1 and fremd_vergeben_am is not null`, [id, hash, jetzt, ablauf]);
+export const bestaetigungAnlegen = (db, { id, hash, jetzt, ablauf, personId, personSeit, adresse, ueberEltern }) => db.query(
+  `insert into konto_bestaetigungen (benutzer_id, fremd_vergeben_am, token_hash, erstellt_am, laeuft_ab_am, person_id, person_seit, adresse, ueber_eltern)
+   select id, fremd_vergeben_am, $2, $3, $4, $5, $6, $7, $8 from benutzer where id = $1 and (fremd_vergeben_am is not null or $5::uuid is not null)`,
+  [id, hash, jetzt, ablauf, personId, personSeit, adresse, ueberEltern]);
 export const bestaetigungVerbrauchen = (db, { hash, jetzt }) => eine(db,
-  'update konto_bestaetigungen set benutzt_am = $2 where token_hash = $1 and benutzt_am is null and laeuft_ab_am > $2 returning id, benutzer_id', [hash, jetzt]);
+  'update konto_bestaetigungen set benutzt_am = $2 where token_hash = $1 and benutzt_am is null and laeuft_ab_am > $2 returning id, benutzer_id, person_id, person_seit, fremd_vergeben_am', [hash, jetzt]);
+/** Die Person gehört zu genau der Verknüpfung, für die der Link entstand (Funktion: personen gehört dem Modul personen). */
+export const personEinloesen = async (db, { personId, seit }) => (await eine(db, 'select person_bestaetigung_einloesen($1, $2) as ok', [personId, seit])).ok;
 export const bestaetigungKonto = (db, { hash, jetzt }) => eine(db,
   `select b.benutzername from konto_bestaetigungen k join benutzer b on b.id = k.benutzer_id
     where k.token_hash = $1 and k.benutzt_am is null and k.laeuft_ab_am > $2 and b.aktiv and b.geloescht_am is null`, [hash, jetzt]);
-/** Nur für die Fremdvergabe, für die der Link entstand. Passwort, PIN und seither gesetzte Adressen des Vergebenden gelten nicht weiter. */
+/**
+ * Nur für die Fremdvergabe, für die der Link entstand (ohne Fremdvergabe: Konto noch unverändert). Passwort und PIN des Vergebenden
+ * gelten nicht weiter; Adresse ist die, an die der Link ging (sonst keine).
+ */
 export const fremdVergabeAufheben = async (db, { id, passwort, jetzt }) => (await db.query(
   `update benutzer b set fremd_vergeben_am = null, fremd_vergeben_von = null, fremd_vergeben_durch = '{}', sichere_email = null,
           passwort_hash = $2, muss_passwort_aendern = false, passwort_geaendert_am = $3, pin_hash = null, pin_fehlversuche = 0,
-          email = s.mail, email_bestaetigt_am = case when s.mail is not null then $3::timestamptz end
-     from (select k.benutzer_id, k.fremd_vergeben_am, case when not exists (select 1 from benutzer x where lower(x.email) = lower(u.sichere_email) and x.id <> u.id) then u.sichere_email end as mail
-             from konto_bestaetigungen k join benutzer u on u.id = k.benutzer_id where k.id = $1) s
-    where b.id = s.benutzer_id and b.fremd_vergeben_am = s.fremd_vergeben_am`, [id, passwort, jetzt])).rowCount === 1;
+          email = s.mail, email_bestaetigt_am = case when s.mail is not null then $3::timestamptz end, passwort_von_eltern = s.ueber_eltern
+     from (select k.benutzer_id, k.fremd_vergeben_am, k.ueber_eltern, case when not exists (select 1 from benutzer x where lower(x.email) = lower(k.adresse) and x.id <> k.benutzer_id) then k.adresse end as mail
+             from konto_bestaetigungen k where k.id = $1) s
+    where b.id = s.benutzer_id and b.fremd_vergeben_am is not distinct from s.fremd_vergeben_am`, [id, passwort, jetzt])).rowCount === 1;
+/** Bestätigten Eltern das Konto und hat die Person das Passwort seither nicht selbst geändert, kennen es die Eltern womöglich. */
+export const passwortVonElternGesetzt = async (db, id) => !!(await eine(db,
+  'select 1 from benutzer where id = $1 and passwort_von_eltern', [id]));
 export const adresslinksVerbrauchen = (db, { benutzerId, jetzt }) => db.query(
   `update einmal_tokens set benutzt_am = $2 where benutzer_id = $1 and zweck in ('passwort_reset', 'email_bestaetigung') and benutzt_am is null`, [benutzerId, jetzt]);

@@ -67,7 +67,7 @@ export default async function ichRoutes(app) {
       pruefeNeuesPasswort(b.passwort_neu, u.benutzername);
       if (b.passwort_neu === b.passwort_alt) throw badRequest('Das neue Passwort muss sich vom alten unterscheiden', 'passwort_unveraendert');
       setze('passwort_hash', await hashSecret(b.passwort_neu));
-      sets.push('muss_passwort_aendern = false', 'passwort_geaendert_am = now()');
+      sets.push('muss_passwort_aendern = false', 'passwort_geaendert_am = now()', 'passwort_von_eltern = false');
       passwortGeaendert = true;
     }
     if ('heimatverein_id' in b) {
