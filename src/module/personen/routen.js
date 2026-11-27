@@ -155,4 +155,25 @@ export default function routen(v2) {
     handler: (ctx, db, { params, body, version, konten }) => dienst.transferEntscheiden(ctx, db, { verein_id: params.id, id: params.transfer_id, version, ...body, konten }),
   });
   v2({ method: 'DELETE', url: `${TRANSFERS}/:transfer_id`, schema: { params: mitTransfer }, handler: (ctx, db, { params }) => dienst.transferZurueckziehen(ctx, db, { verein_id: params.id, id: params.transfer_id }) });
+
+  // Nur im Verbandskontext des Landesverbands (E70: kein Such-Endpunkt für Vereine)
+  const such = { ...text, maxLength: 100 };
+  v2({
+    method: 'GET', url: '/personen/suche',
+    schema: {
+      querystring: objekt({
+        nachname: such, vorname: such, geburtsdatum: datum, judopass_id: { ...text, maxLength: 60 }, verein_id: uuid,
+        status: { type: 'string', enum: ['aktiv', 'ausgetreten'] }, zeitraum_von: datum, zeitraum_bis: datum,
+      }),
+    },
+    handler: (ctx, db, { query }) => dienst.personenSuchen(ctx, db, {
+      nachname: query.nachname ?? null, vorname: query.vorname ?? null, geburtsdatum: query.geburtsdatum ?? null, judopass_id: query.judopass_id ?? null,
+      verein_id: query.verein_id ?? null, status: query.status ?? null, zeitraum_von: query.zeitraum_von ?? null, zeitraum_bis: query.zeitraum_bis ?? null,
+    }),
+  });
+  v2({
+    method: 'GET', url: '/aufgaben', schema: { querystring: objekt({ status: { type: 'string', enum: ['offen', 'erledigt'] } }) },
+    handler: (ctx, db, { query }) => dienst.aufgabenLesen(ctx, db, { status: query.status ?? null }),
+  });
+  v2({ method: 'POST', url: '/aufgaben/:id/erledigen', schema: { params: mitId }, handler: (ctx, db, { params }) => dienst.aufgabeErledigen(ctx, db, params) });
 }

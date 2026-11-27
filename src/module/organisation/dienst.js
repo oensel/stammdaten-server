@@ -136,3 +136,5 @@ export async function vereinLesen(ctx, db, { id }) {
 export const vereinFuer = (_ctx, db, { id }) => daten.vereinLesen(db, id);
 export const landesverbandVon = (_ctx, db, { verein_id }) => daten.landesverbandVon(db, verein_id);
 export const vereinLandVon = async (_ctx, db, { id }) => (await daten.vereinLand(db, id))?.land ?? null;
+/** Für andere Module: alle Vereine unter einem Verband (auch tiefer); der Aufrufer hat den Verband schon geprüft. */
+export const vereineImTeilbaum = (_ctx, db, { verband_id }) => daten.vereineImTeilbaum(db, verband_id);

@@ -176,3 +176,40 @@ export const mitgliedLesen = (db, { id, personId }) => eine(db,
 export const heimatSetzen = (db, { personId, vereinId, von }) => db.query('update personen set heimatverein_id = $2, geaendert_von = coalesce($3, geaendert_von) where id = $1', [personId, vereinId, von]);
 export const austrittBeiTransfer = (db, { id, tag, von }) => eine(db,
   `update mitglieder set austritt = least(coalesce(austritt, $2::date), $2::date), geaendert_von = coalesce($3, geaendert_von) where id = $1 returning ${MITGLIED}`, [id, tag, von]);
+
+// ---- Personensuche des Landesverbands und Aufgaben ----
+const wildcardFrei = (s) => s.replace(/[\\%_]/g, '\\$&');
+/**
+ * Höchstens `limit` Personen. Mit Judopass-ID gilt kein Gebiet (nur die Treffer der ID); sonst nur Personen mit Mitgliedschaft in `vereine`.
+ * Status und Zeitraum beziehen sich auf eine solche Mitgliedschaft im Gebiet. Ohne Kontaktdaten.
+ */
+export async function personenSuchen(db, f) {
+  const p = []; const w = []; const arg = (v) => { p.push(v); return `$${p.length}`; };
+  const gebiet = arg(f.vereine);
+  if (f.judopassId) w.push(`pe.id in (select personen_zu_judopass(${arg(f.judopassId)}))`);
+  if (f.nachname) w.push(`lower(pe.nachname) like lower(${arg(`${wildcardFrei(f.nachname)}%`)}) escape '\\'`);
+  if (f.vorname) w.push(`lower(pe.vorname) like lower(${arg(`${wildcardFrei(f.vorname)}%`)}) escape '\\'`);
+  if (f.geburtsdatum) w.push(`pe.geburtsdatum = ${arg(f.geburtsdatum)}::date`);
+  const m = ['m.person_id = pe.id', `m.verein_id = any(${gebiet}::uuid[])`, 'm.geloescht_am is null', 'm.anonymisiert_am is null'];
+  if (f.vereinId) m.push(`m.verein_id = ${arg(f.vereinId)}::uuid`);
+  if (f.status === 'aktiv') m.push(`m.status = 'aktiv'`);
+  if (f.status === 'ausgetreten') m.push(`m.status = 'ausgetreten'`);
+  if (f.zeitraumBis) m.push(`(m.eintritt is null or m.eintritt <= ${arg(f.zeitraumBis)}::date)`);
+  if (f.zeitraumVon) m.push(`(m.austritt is null or m.austritt >= ${arg(f.zeitraumVon)}::date)`);
+  const imGebiet = `exists (select 1 from mitglieder m where m.person_id = pe.id and m.verein_id = any(${gebiet}::uuid[]) and m.geloescht_am is null and m.anonymisiert_am is null)`;
+  // Mit ID dürfen Treffer außerhalb liegen, solange kein Vereins-, Status- oder Zeitraumfilter ein Mitglied im Gebiet verlangt
+  const mitMitgliedschaft = !f.judopassId || f.vereinId || f.status || f.zeitraumVon || f.zeitraumBis;
+  if (mitMitgliedschaft) w.push(`exists (select 1 from mitglieder m where ${m.join(' and ')})`);
+  return (await db.query(
+    `select pe.id, pe.vorname, pe.nachname, pe.geburtsdatum::text as geburtsdatum, pe.heimatverein_id, ${imGebiet} as im_gebiet
+       from personen pe where ${w.join(' and ')} order by lower(pe.nachname), lower(pe.vorname), pe.id limit ${arg(f.limit)}`, p)).rows;
+}
+export const suchenProtokollieren = (db, s) => db.query(
+  'insert into personensuchen (benutzer_id, verband_id, zeitpunkt, kriterien, treffer) values ($1,$2,$3,$4,$5)', [s.benutzerId, s.verbandId, s.jetzt, s.kriterien, s.treffer]);
+
+const AUFGABE = 'a.id, a.art, a.status, a.erstellt_am, a.erledigt_am, a.person_id, pe.vorname, pe.nachname, pe.geburtsdatum::text as geburtsdatum, pe.heimatverein_id, pe.judopass_hinweis';
+export const aufgabenVon = async (db, { verbandIds, status }) => (await db.query(
+  `select ${AUFGABE} from aufgaben a join personen pe on pe.id = a.person_id where a.verband_id = any($1::uuid[]) and ($2::text is null or a.status = $2) order by a.erstellt_am, a.id`, [verbandIds, status])).rows;
+export const aufgabeSperren = (db, id) => eine(db, 'select id, verband_id, status from aufgaben where id = $1 for update', [id]);
+export const aufgabeMitPerson = (db, id) => eine(db, `select ${AUFGABE} from aufgaben a join personen pe on pe.id = a.person_id where a.id = $1`, [id]);
+export const aufgabeErledigen = (db, { id, von, jetzt }) => db.query(`update aufgaben set status = 'erledigt', erledigt_am = $3, erledigt_von = $2 where id = $1`, [id, von, jetzt]);
