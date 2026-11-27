@@ -6,7 +6,7 @@ import { createPool, mitSperre } from './db.js';
 import { createMailer } from './mailer.js';
 import { verlangeAktuellesSchema } from './migrate.js';
 import { versendeMails } from './module/benachrichtigung/dienst.js';
-import { antragsfristen, austritteVollziehen, volljaehrigkeitPruefen } from './module/personen/dienst.js';
+import { antragsfristen, austritteVollziehen, transfersVollziehen, volljaehrigkeitPruefen } from './module/personen/dienst.js';
 import { systemCtx } from './pipeline/ctx.js';
 
 const log = (text) => console.log(`[worker] ${new Date().toISOString()} ${text}`);
@@ -16,6 +16,7 @@ const JOBS = {
   mailversand: (ctx, pool, { mailer, abbruch }) => versendeMails(ctx, pool, { mailer, adresseVon: ladeMailAdresse, abbruch }),
   volljaehrigkeit: (ctx, pool) => volljaehrigkeitPruefen(ctx, pool),
   austritte: (ctx, pool) => austritteVollziehen(ctx, pool, { konten: { zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle, verbraucheEinladungen } }),
+  transfers: (ctx, pool) => transfersVollziehen(ctx, pool, { konten: { zuMitglied: zugehoerigkeitZuMitglied, aufMitgliedsrolle, verbraucheEinladungen } }),
   antragsfristen: (ctx, pool) => antragsfristen(ctx, pool, { adminsVon: ladeVereinsAdmins }),
 };
 

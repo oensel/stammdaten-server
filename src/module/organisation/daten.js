@@ -53,3 +53,5 @@ export const vereineImBereich = async (db, { alle, vereine, verbaende }) => (awa
     where geloescht_am is null and ($1 or id = any($2::uuid[])
        or exists (select 1 from verband_pfade p where p.nachfahr_id = vereine.id and p.vorfahr_id = any($3::uuid[])))
     order by lower(name), id`, [alle, vereine, verbaende])).rows;
+/** Land des Vereins (Transfer geht nur an Vereine in Deutschland). */
+export const vereinLand = (db, id) => eine(db, 'select land from vereine where id = $1 and geloescht_am is null', [id]);
