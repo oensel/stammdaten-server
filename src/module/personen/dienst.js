@@ -2,8 +2,8 @@ import { inTransaktion } from '../../db.js';
 import { badRequest, conflict, fehler, notFound, tooMany } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
-import { fristFuer, landesverbandVon, vereinFuer, vereinLandVon } from '../organisation/dienst.js';
-import { beendeDirektrechte, darf, darfFelder, ladeZiel, projiziere, verlangeAuf } from '../rechte/dienst.js';
+import { fristFuer, landesverbandVon, vereineImTeilbaum, vereinFuer, vereinLandVon } from '../organisation/dienst.js';
+import { beendeDirektrechte, darf, darfFelder, ladeZiel, listenbereich, projiziere, verlangeAuf } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
 /**
@@ -807,3 +807,47 @@ export async function transfersVollziehen(ctx, db, { konten }) {
   }
   return { vollzogen, abgebrochen };
 }
+
+// ---- Personensuche des Landesverbands und Aufgabenliste (FR-6, E70) ----
+const SUCHE_MAX = 50;
+/** Nur im Verbandskontext, nur wer `recht` dort hat; sonst 404. Liefert den Verband des Kontexts. */
+function verlangeVerband(ctx, recht) {
+  const b = listenbereich(ctx, recht);
+  if (ctx.kontext?.art !== 'verband' || ctx.rechte.geraet || !(b.alle || b.verbaende.includes(ctx.kontext.id))) throw notFound();
+  return ctx.kontext.id;
+}
+
+/**
+ * Personen im Gebiet des Landesverbands, ohne Kontaktdaten, höchstens 50. Die Judopass-ID findet auch Personen außerhalb des Gebiets.
+ * Es gibt nie eine Suche ohne Suchwert. Jede Suche wird protokolliert (Kriterien, nicht Werte).
+ */
+export async function personenSuchen(ctx, db, { nachname = null, vorname = null, geburtsdatum = null, judopass_id = null, verein_id = null, status = null, zeitraum_von = null, zeitraum_bis = null }) {
+  const verband_id = verlangeVerband(ctx, 'personen:SUCHEN');
+  const kriterien = Object.entries({ nachname, vorname, geburtsdatum, judopass_id, verein_id, status, zeitraum_von, zeitraum_bis }).filter(([, v]) => v !== null).map(([k]) => k);
+  if (!['nachname', 'vorname', 'geburtsdatum', 'judopass_id', 'verein_id'].some((k) => kriterien.includes(k))) throw badRequest('Mindestens Name, Vorname, Geburtsdatum, Judopass-ID oder Verein angeben');
+  return inTransaktion(db, async (c) => {
+    const vereine = await vereineImTeilbaum(ctx, c, { verband_id });
+    const zeilen = await daten.personenSuchen(c, { vereine, nachname, vorname, geburtsdatum, judopassId: judopass_id, vereinId: verein_id, status, zeitraumVon: zeitraum_von, zeitraumBis: zeitraum_bis, limit: SUCHE_MAX + 1 });
+    await daten.suchenProtokollieren(c, { benutzerId: ctx.benutzer.id, verbandId: verband_id, jetzt: ctx.jetzt, kriterien, treffer: Math.min(zeilen.length, SUCHE_MAX) });
+    return { personen: zeilen.slice(0, SUCHE_MAX), mehr: zeilen.length > SUCHE_MAX };
+  });
+}
+
+// Aufgaben des Landesverbands wie das Zusammenführen: nur Landesverband, auch nicht der Super-Admin
+const AUFGABEN_RECHT = 'personen_zusammenfuehrung:AENDERN';
+const aufgabenSicht = ({ id, art, status, erstellt_am, erledigt_am, person_id, vorname, nachname, geburtsdatum, heimatverein_id, judopass_hinweis }) =>
+  ({ id, art, status, erstellt_am, erledigt_am, person: { id: person_id, vorname, nachname, geburtsdatum, heimatverein_id, judopass_hinweis } });
+
+export async function aufgabenLesen(ctx, db, { status = null }) {
+  const verband_id = verlangeVerband(ctx, AUFGABEN_RECHT);
+  return { aufgaben: (await daten.aufgabenVon(db, { verbandIds: [verband_id], status })).map(aufgabenSicht) };
+}
+
+export const aufgabeErledigen = (ctx, db, { id }) => inTransaktion(db, async (c) => {
+  const verband_id = verlangeVerband(ctx, AUFGABEN_RECHT);
+  const a = await daten.aufgabeSperren(c, id);
+  if (!a || a.verband_id !== verband_id) throw notFound();
+  if (a.status === 'erledigt') throw conflict('Die Aufgabe ist schon erledigt', 'status_unzulaessig');
+  await daten.aufgabeErledigen(c, { id, von: ctx.benutzer.id, jetzt: ctx.jetzt });
+  return aufgabenSicht(await daten.aufgabeMitPerson(c, id));
+});

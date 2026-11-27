@@ -55,3 +55,5 @@ export const vereineImBereich = async (db, { alle, vereine, verbaende }) => (awa
     order by lower(name), id`, [alle, vereine, verbaende])).rows;
 /** Land des Vereins (Transfer geht nur an Vereine in Deutschland). */
 export const vereinLand = (db, id) => eine(db, 'select land from vereine where id = $1 and geloescht_am is null', [id]);
+export const vereineImTeilbaum = async (db, verbandId) => (await db.query(
+  `select id from vereine where geloescht_am is null and exists (select 1 from verband_pfade p where p.nachfahr_id = vereine.id and p.vorfahr_id = $1)`, [verbandId])).rows.map((r) => r.id);
