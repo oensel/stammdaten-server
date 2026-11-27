@@ -135,3 +135,4 @@ export async function vereinLesen(ctx, db, { id }) {
 /** Für andere Module, ohne eigene Rechteprüfung: der Aufrufer hat das Ziel schon geprüft. */
 export const vereinFuer = (_ctx, db, { id }) => daten.vereinLesen(db, id);
 export const landesverbandVon = (_ctx, db, { verein_id }) => daten.landesverbandVon(db, verein_id);
+export const vereinLandVon = async (_ctx, db, { id }) => (await daten.vereinLand(db, id))?.land ?? null;

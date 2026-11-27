@@ -12,6 +12,8 @@ export const ARTEN = Object.freeze({
   antrag_gestellt: ({ vorname, verein }) => ({ titel: 'Mitgliedschaftsantrag gestellt', text: `Für ${vorname} wurde eine Mitgliedschaft im Verein ${verein} beantragt. War das nicht gewollt, wende dich bitte an den Verein.` }),
   antrag_entschieden: ({ verein, ergebnis }) => ({ titel: 'Mitgliedschaftsantrag', text: `Der Antrag auf Mitgliedschaft im Verein ${verein} wurde ${ergebnis}.` }),
   antrag_verfallen: ({ verein }) => ({ titel: 'Mitgliedschaftsantrag verfallen', text: `Der Antrag auf Mitgliedschaft im Verein ${verein} ist ohne Entscheidung verfallen.` }),
+  transfer_eingegangen: () => ({ titel: 'Neuer Transfer', text: 'Ein Verein hat ein Mitglied an euch gesendet. Bitte annehmen oder ablehnen.' }),
+  transfer_entschieden: ({ ergebnis }) => ({ titel: 'Transfer', text: `Der gesendete Transfer wurde ${ergebnis}.` }),
   verein_verbandswechsel: ({ verein, alt, neu }) => ({
     titel: `Verbandswechsel: ${verein}`,
     text: `Der Verein ${verein} ist vom Verband ${alt} zum Verband ${neu} gewechselt. Die Verbandsrechte gelten ab sofort nach der neuen Zuordnung.`,

@@ -136,4 +136,23 @@ export default function routen(v2) {
       handler: (ctx, db, { params }) => dienst.mitgliedZuordnen(ctx, db, { ...gruppe(params), mitglied_id: params.mitglied_id, zugeordnet }),
     });
   }
+
+  const TRANSFERS = '/vereine/:id/transfers';
+  const mitTransfer = objekt({ id: uuid, transfer_id: uuid }, ['id', 'transfer_id']);
+  v2({
+    method: 'POST', url: TRANSFERS, status: 201,
+    schema: { params: mitId, body: objekt({ person_id: uuid, nach_verein_id: uuid, wirksam_ab: datum, art: { type: 'string', enum: ['vereinswechsel', 'heimatwechsel'] } }, ['person_id', 'nach_verein_id', 'wirksam_ab']) },
+    handler: (ctx, db, { params, body, konten }) => dienst.transferSenden(ctx, db, { verein_id: params.id, ...body, konten }),
+  });
+  v2({
+    method: 'GET', url: TRANSFERS,
+    schema: { params: mitId, querystring: objekt({ richtung: { type: 'string', enum: ['ausgehend', 'eingehend'] }, status: { type: 'string', enum: ['gesendet', 'angenommen', 'abgelehnt', 'zurueckgezogen', 'vollzogen', 'abgebrochen'] } }, ['richtung']) },
+    handler: (ctx, db, { params, query }) => dienst.transfersLesen(ctx, db, { verein_id: params.id, richtung: query.richtung, status: query.status }),
+  });
+  v2({
+    method: 'PATCH', url: `${TRANSFERS}/:transfer_id`, ifMatch: true,
+    schema: { params: mitTransfer, body: objekt({ entscheidung: { type: 'string', enum: ['annehmen', 'ablehnen'] }, reaktivieren: { type: 'boolean' }, grund: { type: 'string', maxLength: 500 } }, ['entscheidung']) },
+    handler: (ctx, db, { params, body, version, konten }) => dienst.transferEntscheiden(ctx, db, { verein_id: params.id, id: params.transfer_id, version, ...body, konten }),
+  });
+  v2({ method: 'DELETE', url: `${TRANSFERS}/:transfer_id`, schema: { params: mitTransfer }, handler: (ctx, db, { params }) => dienst.transferZurueckziehen(ctx, db, { verein_id: params.id, id: params.transfer_id }) });
 }

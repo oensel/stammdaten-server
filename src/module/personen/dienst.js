@@ -2,7 +2,7 @@ import { inTransaktion } from '../../db.js';
 import { badRequest, conflict, fehler, notFound, tooMany } from '../../errors.js';
 import * as audit from '../audit/dienst.js';
 import * as benachrichtigung from '../benachrichtigung/dienst.js';
-import { fristFuer, landesverbandVon, vereinFuer } from '../organisation/dienst.js';
+import { fristFuer, landesverbandVon, vereinFuer, vereinLandVon } from '../organisation/dienst.js';
 import { beendeDirektrechte, darf, darfFelder, ladeZiel, projiziere, verlangeAuf } from '../rechte/dienst.js';
 import * as daten from './daten.js';
 
@@ -683,4 +683,127 @@ export async function mitgliedZuordnen(ctx, db, { verein_id, id, mitglied_id, zu
     else if (!await daten.gruppeAustragen(c, { id, mitgliedId: mitglied_id, jetzt: ctx.jetzt, von: ctx.benutzer.id })) throw notFound();
     return { gruppe_id: id, mitglied_id, zugeordnet };
   });
+}
+
+// ---- Transfer (FR-9, FR-10, E27, E31, E73, E82) ----
+Object.assign(VERSTOSS, { transfer_je_person_offen: [409, 'Für die Person gibt es schon einen offenen Transfer', 'transfer_offen'] });
+const OFFEN = ['gesendet', 'angenommen'];
+
+/** Der Absender sieht den ganzen Vorgang. */
+const absenderSicht = ({ id, person_id, nach_verein_id, nach_mitgliedschaft, art, status, wirksam_ab, grund, gesendet_im_kontext, erstellt_am, entschieden_am, change_seq, vorname, nachname, geburtsdatum }) =>
+  ({ id, person_id, nach_verein_id, nach_mitgliedschaft, art, status, wirksam_ab, grund, gesendet_im_kontext, erstellt_am, entschieden_am, change_seq, ...(vorname === undefined ? {} : { vorname, nachname, geburtsdatum }) });
+/** Der aufnehmende Verein sieht nur Name, Geburtsdatum und aktuellen Grad (Grad folgt mit Epic 6), nicht den Absender; die Person erst nach dem Vollzug. */
+const empfaengerSicht = (t) => ({
+  id: t.id, nach_verein_id: t.nach_verein_id, status: t.status, wirksam_ab: t.wirksam_ab, grund: t.grund, erstellt_am: t.erstellt_am, entschieden_am: t.entschieden_am, change_seq: t.change_seq,
+  ...(['gesendet', 'angenommen', 'vollzogen'].includes(t.status) ? { vorname: t.vorname, nachname: t.nachname, geburtsdatum: t.geburtsdatum, grad: null } : {}),
+  ...(t.status === 'vollzogen' ? { person_id: t.person_id } : {}),
+});
+
+async function zielVerein(ctx, c, id) {
+  const v = await vereinFuer(ctx, c, { id });
+  if (!v || await vereinLandVon(ctx, c, { id }) !== 'DE') throw fehler(422, 'Der Zielverein ist unbekannt oder liegt nicht in Deutschland', 'zielverein_ungueltig');
+  if (v.aufgeloest_am) throw conflict('Der Zielverein ist aufgelöst', 'verein_aufgeloest');
+  return v;
+}
+
+/** Der Verein mit dem Pass (oder sein Landesverband) sendet die Person an einen Zielverein; ohne `art` schlägt der Server vor. */
+export async function transferSenden(ctx, db, { verein_id, person_id, nach_verein_id, wirksam_ab, art = null, konten }) {
+  if (ctx.rechte.geraet || ctx.rechte.unbestaetigt) throw notFound();
+  await verlangeAuf(ctx, db, 'transfer:ANLEGEN', { vereine: [verein_id] });
+  return schreibe(db, async (c) => {
+    const person = await daten.personSperren(c, person_id);
+    // Nur der Verein, bei dem der Pass liegt; sonst weiß er nichts von der Person
+    if (!person || person.heimatverein_id !== verein_id) throw notFound();
+    if (nach_verein_id === verein_id) throw fehler(422, 'Der Zielverein ist der abgebende Verein', 'zielverein_ungueltig');
+    const nach = await zielVerein(ctx, c, nach_verein_id);
+    const von = await daten.mitgliedschaftIn(c, { personId: person_id, vereinId: verein_id });
+    const vorhanden = await daten.mitgliedschaftIn(c, { personId: person_id, vereinId: nach_verein_id });
+    const inNach = vorhanden && !vorhanden.geloescht_am ? vorhanden : null;
+    const gewaehlt = art ?? (inNach ? 'heimatwechsel' : 'vereinswechsel');
+    if (gewaehlt === 'heimatwechsel' && !inNach) throw fehler(422, 'Ein Heimatwechsel setzt eine Mitgliedschaft im Zielverein voraus', 'art_unzulaessig');
+    const t = await daten.transferAnlegen(c, {
+      personId: person_id, vonVereinId: verein_id, vonMitgliedschaft: von.id, nachVereinId: nach_verein_id, nachMitgliedschaft: vorhanden?.id ?? null, art: gewaehlt,
+      wirksamAb: wirksam_ab, von: ctx.benutzer.id, kontext: ctx.kontext?.art === 'verband' ? 'landesverband' : 'abgebender_verein', jetzt: ctx.jetzt,
+    });
+    await benachrichtigung.senden(ctx, c, { empfaenger: await konten.adminsVon(c, nach.id), art: 'transfer_eingegangen', daten: {} });
+    return absenderSicht(t);
+  });
+}
+
+/** Ausgehende: Absender oder Landesverband; eingehende: nur der aufnehmende Verein im eigenen Kontext. */
+export async function transfersLesen(ctx, db, { verein_id, richtung, status = null }) {
+  if (richtung === 'eingehend') await verlangeVerein(ctx, db, verein_id, 'transfer:LESEN');
+  else await verlangeAuf(ctx, db, 'transfer:LESEN', { vereine: [verein_id] });
+  const zeilen = await daten.transfersVon(db, { vereinId: verein_id, richtung, status });
+  return { transfers: zeilen.map(richtung === 'eingehend' ? empfaengerSicht : absenderSicht) };
+}
+
+/**
+ * Vollzug in einer Transaktion: prüft die Vorbedingungen erneut, wechselt Pass und Heimatverein, beendet beim Vereinswechsel die alte
+ * Mitgliedschaft. Forderungen, Anmeldungen, Lizenzen und Graduierungen hängen an der Person und bleiben. Sonst Abbruch mit Grund.
+ */
+async function transferVollziehen(ctx, c, t, konten) {
+  const von = ctx.benutzer?.id ?? null;
+  const abbruch = (grund) => daten.transferEntscheiden(c, { id: t.id, status: 'abgebrochen', grund, von, jetzt: ctx.jetzt });
+  const person = await daten.personSperren(c, t.person_id);
+  if (!person) return abbruch('Die Person gibt es nicht mehr');
+  if (person.heimatverein_id !== t.von_verein_id) return abbruch('Der Pass liegt nicht mehr beim abgebenden Verein');
+  const nach = await vereinFuer(ctx, c, { id: t.nach_verein_id });
+  if (!nach || nach.aufgeloest_am) return abbruch('Der aufnehmende Verein ist aufgelöst');
+  const alt = await daten.mitgliedSperren(c, { id: t.von_mitgliedschaft, vereinId: t.von_verein_id });
+  if (!alt) return abbruch('Die Mitgliedschaft im abgebenden Verein gibt es nicht mehr');
+  const tag = heute(ctx);
+  const vorhanden = await daten.mitgliedschaftIn(c, { personId: t.person_id, vereinId: t.nach_verein_id });
+  if (!vorhanden) await daten.mitgliedschaftAnlegen(c, { personId: t.person_id, vereinId: t.nach_verein_id, vorname: person.vorname, nachname: person.nachname, eintritt: t.wirksam_ab, von });
+  else if (vorhanden.geloescht_am || vorhanden.status === 'ausgetreten' || (vorhanden.status === 'ruhend' && t.reaktivieren)) {
+    await daten.mitgliedschaftReaktivieren(c, { id: vorhanden.id, eintritt: null, von });
+  }
+  await daten.heimatSetzen(c, { personId: t.person_id, vereinId: t.nach_verein_id, von });
+  if (t.art === 'vereinswechsel') {
+    await daten.austrittBeiTransfer(c, { id: alt.id, tag: t.wirksam_ab < tag ? t.wirksam_ab : tag, von });
+    if (alt.status !== 'ausgetreten') await vollzieheAustritt(ctx, c, alt, konten);
+  }
+  return daten.transferEntscheiden(c, { id: t.id, status: 'vollzogen', von, jetzt: ctx.jetzt });
+}
+
+/** Der aufnehmende Verein nimmt an (am Wirksamkeitstag oder sofort vollzogen) oder lehnt ab. */
+export const transferEntscheiden = (ctx, db, { verein_id, id, version, entscheidung, reaktivieren = null, grund = null, konten }) => schreibe(db, async (c) => {
+  await verlangeVerein(ctx, c, verein_id, 'transfer:AENDERN');
+  const t = await daten.transferSperren(c, id);
+  if (!t || t.nach_verein_id !== verein_id) throw notFound();
+  pruefeVersion(t, version);
+  if (t.status !== 'gesendet') throw conflict('Der Transfer ist schon entschieden', 'status_unzulaessig');
+  const von = ctx.benutzer.id;
+  let neu;
+  if (entscheidung === 'ablehnen') neu = await daten.transferEntscheiden(c, { id, status: 'abgelehnt', grund, von, jetzt: ctx.jetzt });
+  else {
+    await zielVerein(ctx, c, verein_id);
+    neu = await daten.transferEntscheiden(c, { id, status: 'angenommen', reaktivieren, von, jetzt: ctx.jetzt });
+    if (neu.wirksam_ab <= heute(ctx)) neu = await transferVollziehen(ctx, c, neu, konten);
+  }
+  await benachrichtigung.senden(ctx, c, { empfaenger: [{ benutzer_id: t.gesendet_von }], art: 'transfer_entschieden', daten: { ergebnis: neu.status } });
+  return empfaengerSicht(await daten.transferMitPerson(c, id));
+});
+
+/** Bis zum Vollzug, auch nach der Annahme. */
+export const transferZurueckziehen = (ctx, db, { verein_id, id }) => schreibe(db, async (c) => {
+  await verlangeAuf(ctx, c, 'transfer:ANLEGEN', { vereine: [verein_id] });
+  const t = await daten.transferSperren(c, id);
+  if (!t || t.von_verein_id !== verein_id) throw notFound();
+  if (!OFFEN.includes(t.status)) throw conflict('Der Transfer ist schon abgeschlossen', 'status_unzulaessig');
+  await daten.transferEntscheiden(c, { id, status: 'zurueckgezogen', von: ctx.benutzer.id, jetzt: ctx.jetzt });
+  return absenderSicht(await daten.transferMitPerson(c, id));
+});
+
+/** Job: vollzieht angenommene Transfers, deren Wirksamkeitstag erreicht ist, je Transfer in eigener Transaktion. */
+export async function transfersVollziehen(ctx, db, { konten }) {
+  let vollzogen = 0; let abgebrochen = 0;
+  for (const { id } of await daten.faelligeTransfers(db, heute(ctx))) {
+    await inTransaktion(db, async (c) => {
+      const t = await daten.transferSperren(c, id);
+      if (t?.status !== 'angenommen' || t.wirksam_ab > heute(ctx)) return;
+      if ((await transferVollziehen(ctx, c, t, konten)).status === 'vollzogen') vollzogen++; else abgebrochen++;
+    });
+  }
+  return { vollzogen, abgebrochen };
 }

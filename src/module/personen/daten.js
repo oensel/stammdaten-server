@@ -149,3 +149,30 @@ export const gruppeAustragen = async (db, { id, mitgliedId, jetzt, von }) => (aw
   'update mitglied_gruppen set geloescht_am = $3, geaendert_von = $4 where gruppe_id = $1 and mitglied_id = $2 and geloescht_am is null', [id, mitgliedId, jetzt, von])).rowCount === 1;
 export const gruppenAustragen = (db, { mitgliedId, jetzt, von }) => db.query(
   'update mitglied_gruppen set geloescht_am = $2, geaendert_von = coalesce($3, geaendert_von) where mitglied_id = $1 and geloescht_am is null', [mitgliedId, jetzt, von]);
+
+// ---- Transfer ----
+const TRANSFER = `id, person_id, von_verein_id, von_mitgliedschaft, nach_verein_id, nach_mitgliedschaft, art, status, wirksam_ab::text as wirksam_ab, reaktivieren, grund,
+  gesendet_im_kontext, gesendet_von, erstellt_am, entschieden_am, change_seq`;
+const MIT_PERSON = `select t.id, t.person_id, t.von_verein_id, t.von_mitgliedschaft, t.nach_verein_id, t.nach_mitgliedschaft, t.art, t.status, t.wirksam_ab::text as wirksam_ab, t.reaktivieren, t.grund,
+  t.gesendet_im_kontext, t.erstellt_am, t.entschieden_am, t.change_seq, p.vorname, p.nachname, p.geburtsdatum::text as geburtsdatum from transfers t join personen p on p.id = t.person_id`;
+export const transferAnlegen = (db, t) => eine(db,
+  `insert into transfers (person_id, von_verein_id, von_mitgliedschaft, nach_verein_id, nach_mitgliedschaft, art, wirksam_ab, gesendet_von, gesendet_im_kontext, erstellt_am, geaendert_von)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$8) returning ${TRANSFER}`,
+  [t.personId, t.vonVereinId, t.vonMitgliedschaft, t.nachVereinId, t.nachMitgliedschaft, t.art, t.wirksamAb, t.von, t.kontext, t.jetzt]);
+export const transferSperren = (db, id) => eine(db, `select ${TRANSFER} from transfers where id = $1 for update`, [id]);
+export const transferMitPerson = (db, id) => eine(db, `${MIT_PERSON} where t.id = $1`, [id]);
+export const transfersVon = async (db, { vereinId, richtung, status }) => (await db.query(
+  `${MIT_PERSON} where ${richtung === 'eingehend' ? 't.nach_verein_id' : 't.von_verein_id'} = $1 and ($2::text is null or t.status = $2) order by t.erstellt_am desc, t.id`, [vereinId, status])).rows;
+/** Für Story 3.11: Zusammenführen ist gesperrt, solange die Person einen offenen Transfer hat. */
+export const offenerTransfer = (db, personId) => eine(db, `select ${TRANSFER} from transfers where person_id = $1 and status in ('gesendet', 'angenommen')`, [personId]);
+export const transferEntscheiden = (db, t) => eine(db,
+  `update transfers set status = $2, grund = coalesce($3, grund), reaktivieren = coalesce($4, reaktivieren), entschieden_von = coalesce($5, entschieden_von),
+          entschieden_am = $6, geaendert_von = coalesce($5, geaendert_von) where id = $1 returning ${TRANSFER}`,
+  [t.id, t.status, t.grund ?? null, t.reaktivieren ?? null, t.von, t.jetzt]);
+export const faelligeTransfers = async (db, tag) => (await db.query(
+  `select id from transfers where status = 'angenommen' and wirksam_ab <= $1::date order by wirksam_ab, id`, [tag])).rows;
+export const mitgliedLesen = (db, { id, personId }) => eine(db,
+  `select ${MITGLIED} from mitglieder where id = $1 and person_id = $2 and geloescht_am is null and anonymisiert_am is null for update`, [id, personId]);
+export const heimatSetzen = (db, { personId, vereinId, von }) => db.query('update personen set heimatverein_id = $2, geaendert_von = coalesce($3, geaendert_von) where id = $1', [personId, vereinId, von]);
+export const austrittBeiTransfer = (db, { id, tag, von }) => eine(db,
+  `update mitglieder set austritt = least(coalesce(austritt, $2::date), $2::date), geaendert_von = coalesce($3, geaendert_von) where id = $1 returning ${MITGLIED}`, [id, tag, von]);
